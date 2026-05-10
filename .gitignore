@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+
+# project specific
+.DS_Store
+resources/
+*.mp4
