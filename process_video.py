@@ -10,7 +10,6 @@ Usage:
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -119,7 +118,7 @@ def extract_braw_audio_for_analysis(
 
 def _video_codec_args(hw_accel: bool, crf: int, preset: str, video_bitrate: str) -> list[str]:
     if hw_accel:
-        return ["-c:v", "h264_videotoolbox", "-b:v", video_bitrate, "-allow_sw", "1"]
+        return ["-c:v", "h264_videotoolbox", "-b:v", video_bitrate, "-allow_sw", "1", "-color_range", "tv"]
     return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
 
 
@@ -134,16 +133,19 @@ def encode_braw(
     test_duration: float | None,
     hw_accel: bool = False,
     video_bitrate: str = "8M",
+    braw_threads: int = 2,
+    braw_scale: int = 1,
 ) -> None:
     """Pipe braw-decode → ffmpeg, seeking via --in frame index."""
     fmt_args = braw_format_args(braw_path)
     fps = braw_fps(fmt_args)
     start_frame = int(offset * fps)
-    threads = os.cpu_count() or 4
+    threads = braw_threads
 
     decode_cmd = [
         str(BRAW_DECODE_BIN), "--in", str(start_frame),
         "--threads", str(threads),
+        "--scale", str(braw_scale),
         str(braw_path),
     ]
 
@@ -298,6 +300,15 @@ def main() -> None:
         "--video-bitrate", default="8M",
         help="Target bitrate for hardware encoding (default: 8M — YouTube recommended for 1080p)",
     )
+    parser.add_argument(
+        "--braw-threads", type=int, default=2, metavar="N",
+        help="CPU threads for braw-decode (default: 2; reduce if sharing the machine)",
+    )
+    parser.add_argument(
+        "--braw-scale", type=int, default=1, choices=[1, 2, 4, 8], metavar="N",
+        help="Downsample BRAW by this factor before piping to ffmpeg (1/2/4/8). "
+             "Use 2 when source is 4K and output is 1080p — cuts decode CPU and pipe bandwidth by 4x.",
+    )
     args = parser.parse_args()
 
     braw = is_braw(args.video)
@@ -363,7 +374,8 @@ def main() -> None:
 
         if braw:
             encode_braw(args.video, args.audio, args.output, offset, audio_trim,
-                        args.crf, args.preset, args.test_duration, args.hw, args.video_bitrate)
+                        args.crf, args.preset, args.test_duration, args.hw, args.video_bitrate,
+                        args.braw_threads, args.braw_scale)
         else:
             encode_video(args.video, args.audio, args.output, offset, audio_trim,
                          args.crf, args.preset, args.test_duration, args.hw, args.video_bitrate)
