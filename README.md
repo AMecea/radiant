@@ -121,6 +121,52 @@ libx264 `slow` preset is the default for maximum compression efficiency, but You
 | `--hw` | ~15× | 8 Mbps bitrate |
 | `--hw --video-bitrate 16M` | ~15× | 16 Mbps bitrate |
 
+## Clipping (`clip.py`)
+
+Cut a segment from any video, with optional TikTok-format cropping.
+
+```
+uv run clip.py <input> -s HH:MM:SS -e HH:MM:SS [--crop-format default|tiktok] [--track-face]
+```
+
+### Crop formats
+
+| `--crop-format` | Description |
+|---|---|
+| `default` | Keeps original resolution and aspect ratio |
+| `tiktok` | Static center crop → 1080×1920 (9:16) |
+
+### Face tracking (`--track-face`)
+
+Detects the face every N frames with OpenCV's DNN detector (Caffe SSD res10, ~10 MB,
+downloaded automatically on first use to `~/.cache/video-radiant/`), interpolates
+positions between samples, smooths the trajectory with a Gaussian filter, then
+re-encodes with a per-frame 9:16 crop centered on the face.
+
+`--track-face` is independent of `--crop-format` — it always produces a 9:16 output
+centered on the detected face.
+
+```bash
+# face-tracked 9:16 clip
+uv run clip.py talk.mp4 -s 0:05:00 -e 0:05:30 --track-face
+
+# detect every 5th frame, faster response to movement
+uv run clip.py talk.mp4 -s 0:05:00 -e 0:05:30 --track-face --track-sample 5 --track-sigma 10
+
+# very smooth pan (good for slow walkers)
+uv run clip.py talk.mp4 -s 0:05:00 -e 0:05:30 --track-face --track-sigma 60
+```
+
+#### Tuning flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--track-sample N` | `10` | Detect face every N frames; lower = more accurate, slower |
+| `--track-sigma S` | `30` | Gaussian smoothing in frames (~1.2 s at 25 fps); lower = follows movement faster, higher = smoother/less jitter |
+
+**Rule of thumb:** lower `--track-sigma` when the subject moves quickly and you want the
+frame to keep up; raise it when movement is slow and jitter is the bigger problem.
+
 ## Audio sync notes
 
 - Auto-detect analyses the **first 10 minutes** of the video audio via FFT cross-correlation against the speaker-mic recording.
