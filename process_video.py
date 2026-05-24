@@ -165,7 +165,7 @@ def encode_braw(
         "-shortest",
     ]
     if test_duration is not None:
-        ffmpeg_cmd += ["-t", str(int(test_duration * 60))]
+        ffmpeg_cmd += ["-t", str(int(test_duration))]
     ffmpeg_cmd.append(str(output_path))
 
     print(f"  $ {' '.join(str(c) for c in decode_cmd)} | {' '.join(str(c) for c in ffmpeg_cmd)}")
@@ -230,7 +230,7 @@ def encode_video(
         "-shortest",
     ]
     if test_duration is not None:
-        cmd += ["-t", str(int(test_duration * 60))]
+        cmd += ["-t", str(int(test_duration))]
     cmd.append(str(output_path))
     run(cmd)
 
@@ -253,8 +253,30 @@ def find_offset(video_audio_path: Path, ref_audio_path: Path, duration: int) -> 
     return offset_samples / ANALYSIS_SR
 
 
-def upload(output_path: Path, remote: str) -> None:
-    run(["rclone", "copy", str(output_path), remote, "--progress"])
+def _public_url(remote: str, filename: str) -> str:
+    _, rest = remote.split(":", 1)
+    parts = rest.strip("/").split("/", 1)
+    bucket = parts[0]
+    prefix = parts[1].rstrip("/") + "/" if len(parts) > 1 and parts[1] else ""
+    key = prefix + filename
+    if remote.lower().startswith("s3"):
+        return f"https://{bucket}.s3.amazonaws.com/{key}"
+    return f"https://storage.googleapis.com/{bucket}/{key}"
+
+
+def upload(output_path: Path, remote: str, public: bool = False) -> None:
+    cmd = ["rclone", "copy", str(output_path), remote, "--progress"]
+    if public:
+        remote_lower = remote.lower()
+        if remote_lower.startswith("s3"):
+            cmd += ["--s3-acl", "public-read"]
+        elif remote_lower.startswith("gs"):
+            cmd += ["--gcs-object-acl", "publicRead"]
+        else:
+            sys.exit(f"Error: --upload-public is not supported for remote '{remote}' (expected s3: or gs:)")
+    run(cmd)
+    if public:
+        print(f"Public URL: {_public_url(remote, output_path.name)}")
 
 
 # ---------------------------------------------------------------------------
@@ -284,13 +306,14 @@ def main() -> None:
         help="rclone remote destination, e.g. 'gdrive:Videos/'",
     )
     parser.add_argument("--skip-encode", action="store_true", help="Skip encode, only upload")
+    parser.add_argument("--upload-public", action="store_true", help="Set ACL to public-read on upload (s3: and gs: remotes)")
     parser.add_argument(
         "--analysis-duration", type=int, default=600, metavar="SECONDS",
         help="Audio seconds to use for sync detection (default: 600)",
     )
     parser.add_argument(
-        "--test-duration", type=float, default=None, metavar="MINUTES",
-        help="Encode only N minutes (for quick sanity checks)",
+        "--test-duration", type=float, default=None, metavar="SECONDS",
+        help="Encode only N seconds (for quick sanity checks); prefixes output with test_ and skips upload",
     )
     parser.add_argument(
         "--hw", action="store_true",
@@ -310,6 +333,9 @@ def main() -> None:
              "Use 2 when source is 4K and output is 1080p — cuts decode CPU and pipe bandwidth by 4x.",
     )
     args = parser.parse_args()
+
+    if args.test_duration is not None:
+        args.output = args.output.with_name("test_" + args.output.name)
 
     braw = is_braw(args.video)
 
@@ -366,7 +392,7 @@ def main() -> None:
 
         print(f"\n[3/3] Encoding → {args.output}")
         if args.test_duration:
-            print(f"  Test mode: encoding only {args.test_duration} minute(s).")
+            print(f"  Test mode: encoding only {args.test_duration}s → {args.output}")
         if args.hw:
             print(f"  Hardware encoder: VideoToolbox H.264 @ {args.video_bitrate}")
         else:
@@ -383,11 +409,14 @@ def main() -> None:
         print(f"\nOutput written: {args.output}")
 
     if args.upload:
-        if not args.output.exists():
-            sys.exit(f"Error: output file not found: {args.output}")
-        print(f"\nUploading to {args.upload} ...")
-        upload(args.output, args.upload)
-        print("Upload complete.")
+        if args.test_duration is not None:
+            print("\nSkipping upload (--test-duration is set).")
+        else:
+            if not args.output.exists():
+                sys.exit(f"Error: output file not found: {args.output}")
+            print(f"\nUploading to {args.upload} ...")
+            upload(args.output, args.upload, public=args.upload_public)
+            print("Upload complete.")
 
     print("\nDone.")
 
