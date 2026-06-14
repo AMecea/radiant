@@ -6,3 +6,5 @@ __pycache__
 resources/
 *.mp4
 runs/
+
+my_pipline*
