@@ -1,0 +1,43 @@
+# Demonstrates the `youtube` action — upload a finished video to YouTube with a
+# title and description via the YouTube Data API v3.
+#
+#   video_editor validate --plan examples/youtube.yaml
+#   video_editor run      --plan examples/youtube.yaml --step publish --dry-run
+#   video_editor run      --plan examples/youtube.yaml --step publish
+#
+# `validate` / `--dry-run` need no credentials. A real upload needs a one-time
+# Google Cloud setup:
+#
+#   1. Go to https://console.cloud.google.com/ and create (or pick) a project.
+#   2. APIs & Services → Library → enable "YouTube Data API v3".
+#   3. APIs & Services → OAuth consent screen: choose "External", fill in the
+#      app name / support email, and add yourself under "Test users" (while the
+#      app is unverified only test users can authorise it).
+#   4. APIs & Services → Credentials → Create credentials → OAuth client ID →
+#      application type "Desktop app". Download the JSON and save it next to your
+#      plan as `client_secrets.json` (or point `client_secrets:` below at it).
+#   5. First `run` opens a browser to authorise; the resulting token is cached at
+#      `<workdir>/youtube_token.json` so later runs are non-interactive. Delete
+#      that file to re-authorise (e.g. after changing accounts or scopes).
+#
+# Note: while the OAuth app is unverified, YouTube forces uploads to `private`
+# regardless of `privacy_status` — submit the app for verification to lift that.
+# Default upload quota is ~6 uploads/day (1600 units each, 10000/day quota).
+
+name: youtube_demo
+
+vars:
+  video: "./resources/final.mp4"
+
+steps:
+  - id: publish                    # outputs: video_id, url
+    action: youtube
+    with:
+      file:        "${vars.video}"
+      title:       "Radiant — Episode 1"
+      description: |
+        Recorded and edited with video-radiant.
+        Chapters, links and more in the pinned comment.
+      tags:           [radiant, video]
+      privacy_status: unlisted
+      client_secrets: "./client_secrets.json"
