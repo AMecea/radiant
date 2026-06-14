@@ -1,0 +1,59 @@
+# Demonstrates the `trim` step — keep or drop a list of time ranges in one
+# ffmpeg pass (select/aselect), so video + audio stay in sync and the kept
+# pieces play back gap-free. It re-encodes (select can't stream-copy) and works
+# standalone or as a `pipe` stage.
+#
+#   video_editor validate --plan examples/trim.yaml
+#   video_editor list     --plan examples/trim.yaml
+#   video_editor run      --plan examples/trim.yaml --step highlights
+#   video_editor run      --plan examples/trim.yaml --preview 5    # cap to 5s
+#
+# Artifacts land under ./runs/trim_demo/<step-id>/.
+
+name: trim_demo
+
+vars:
+  source: "./test_1petru_5_1_5.mp4"
+
+steps:
+  - id: highlights                 # outputs: file — keep only these two ranges
+    action: trim
+    with:
+      input: "${vars.source}"
+      output: "highlights.mp4"
+      include:
+        - { start: "00:00:02", end: "00:00:06" }
+        - { start: 10, end: 13.5 }       # ranges may be seconds or clock strings
+      vcodec: libx264
+      crf: 20
+      preset: medium
+
+  - id: tidy                       # outputs: file — drop the intro + a dead patch
+    action: trim
+    with:
+      input: "${vars.source}"
+      output: "tidy.mp4"
+      exclude:
+        - [0, 3]                         # [start, end] pair form
+        - { start: "00:00:08", end: "00:00:11" }
+      scale: "-2:720"                    # extra filters apply after the cut
+
+  - id: trim_pipe                  # outputs: file — trim as the source of a pipe
+    action: pipe
+    with:
+      output: "trimmed_720p.mp4"
+      stages:
+        # Stage 1 (source): cut the ranges, stream the result to stdout.
+        - action: trim
+          with:
+            input: "${vars.source}"
+            include:
+              - { start: 1, end: 4 }
+              - { start: 7, end: 9 }
+        # Stage 2 (sink): downscale + final encode.
+        - action: ffmpeg
+          with:
+            vcodec: libx264
+            crf: 23
+            preset: fast
+            scale: "-2:720"
