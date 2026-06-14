@@ -2,21 +2,25 @@
 
 Writes a ``<input-stem>.txt`` with ``start\\tend\\ttext`` lines (handy for eyeballing
 reel start/end timestamps).
-
-Outputs:
-  transcript : absolute path to the .txt file
 """
 
 import sys
 from pathlib import Path
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 class TranscribeStep(Step):
     action = "transcribe"
-    produces = ("transcript",)
-    artifacts = ("transcript",)
+    summary = "Whisper transcript with per-segment start/end timestamps."
+    params = (
+        Param("input", "Audio/video file to transcribe.", type="path", required=True),
+        Param("language", "Spoken-language hint passed to Whisper.", default="ro"),
+        Param("model", "faster-whisper model name (e.g. tiny, base, turbo).", default="turbo"),
+    )
+    outputs = (
+        Output("transcript", "Absolute path to the written .txt transcript.", artifact=True),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         import subprocess

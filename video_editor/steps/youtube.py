@@ -4,26 +4,12 @@ Uses the YouTube Data API v3 (resumable upload) and OAuth user credentials. On
 first run it opens a browser to authorise; the resulting token is cached so later
 runs are non-interactive. As with ``upload``, the actual upload is skipped under
 ``--dry-run`` and ``--preview``.
-
-Params:
-  file           : video file to upload                                  (required)
-  title          : video title                                           (required)
-  description    : video description                                     (default "")
-  tags           : list of tags                                          (default [])
-  category_id    : YouTube category id                                   (default "22", People & Blogs)
-  privacy_status : "private" | "unlisted" | "public"                     (default "private")
-  client_secrets : OAuth client-secrets JSON (the "Desktop app" creds)   (default "client_secrets.json")
-  token          : cached-credentials file                               (default "<workdir>/youtube_token.json")
-
-Outputs:
-  video_id : the new video's id
-  url      : https://youtu.be/<video_id>
 """
 
 import sys
 from pathlib import Path
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 # YouTube Data API upload scope.
 _SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
@@ -64,7 +50,24 @@ def _credentials(client_secrets: Path, token: Path):
 
 class YouTubeUploadStep(Step):
     action = "youtube"
-    produces = ("video_id", "url")
+    summary = "Upload a local video to YouTube (Data API v3, OAuth user creds)."
+    params = (
+        Param("file", "Video file to upload.", type="path", required=True),
+        Param("title", "Video title.", required=True),
+        Param("description", "Video description.", default=""),
+        Param("tags", "List of tags (or a comma-separated string).", type="list", default=[]),
+        Param("category_id", "YouTube category id (22 = People & Blogs).", default="22"),
+        Param("privacy_status", "Visibility of the uploaded video.",
+              type="enum", choices=("private", "unlisted", "public"), default="private"),
+        Param("client_secrets", "OAuth client-secrets JSON (a 'Desktop app' client).",
+              type="path", default="client_secrets.json"),
+        Param("token", "Cached-credentials file.",
+              type="path", default="<workdir>/youtube_token.json"),
+    )
+    outputs = (
+        Output("video_id", "The new video's id."),
+        Output("url", "https://youtu.be/<video_id>"),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         file = Path(self.require(params, "file"))

@@ -11,7 +11,7 @@ import yaml
 
 from . import hooks
 from .state import State
-from .steps import artifacts_for, get_step, produces_for
+from .steps import artifacts_for, get_step, produces_for, required_params_for
 from .steps.base import PauseSignal, StepContext
 
 _REF_RE = re.compile(r"\$\{([^}]+)\}")
@@ -105,6 +105,12 @@ class Plan:
             for dep in s.needs:
                 if dep not in by_id:
                     raise PlanError(f"step '{s.id}': needs unknown step '{dep}'")
+            missing = [p for p in required_params_for(s.action) if s.with_.get(p) is None]
+            if missing:
+                raise PlanError(
+                    f"step '{s.id}' (action '{s.action}') is missing required "
+                    f"parameter(s): {', '.join(missing)}"
+                )
 
         self._check_acyclic()
 

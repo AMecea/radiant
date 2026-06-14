@@ -7,23 +7,16 @@ args (rawvideo geometry + fps) as pipe metadata, so the consumer knows how to
 read the stream. See ``steps/pipe.py``.
 
 It does not run standalone (there is nothing to persist — raw frames are only
-useful piped into an encoder), so ``run`` raises with guidance.
-
-Params:
-  video    : source .braw file                       (required)
-  offset   : seconds to seek before decoding (→ start frame); default 0
-  threads  : braw-decode --threads (default 2)
-  scale    : braw-decode --scale  (default 1)
-
-Pipe metadata produced:
-  input_args : ffmpeg input args describing this stage's stdout (incl. -i pipe:0)
+useful piped into an encoder), so ``run`` raises with guidance. As a pipe stage it
+hands the downstream consumer the matching ffmpeg input args (rawvideo geometry +
+fps, including ``-i pipe:0``) as pipe metadata.
 """
 
 import sys
 from pathlib import Path
 
 from ..media import BRAW_DECODE_BIN, braw_format_args, braw_fps, is_braw
-from .base import Step, StepContext
+from .base import Param, Step, StepContext
 
 # Illustrative geometry shown in --dry-run, where we don't probe the file.
 _DRY_RUN_INPUT_ARGS = [
@@ -34,8 +27,15 @@ _DRY_RUN_INPUT_ARGS = [
 
 class BrawDecodeStep(Step):
     action = "braw_decode"
-    produces = ()        # source stage — nothing to persist on its own
-    artifacts = ()
+    summary = "Decode Blackmagic RAW frames to a raw RGBA stream (pipe-only source)."
+    params = (
+        Param("video", "Source .braw file.", type="path", required=True),
+        Param("offset", "Seconds to seek before decoding (→ start frame).",
+              type="float", default=0.0),
+        Param("threads", "braw-decode --threads.", type="int", default=2),
+        Param("scale", "braw-decode --scale (decode downscale factor).", type="int", default=1),
+    )
+    outputs = ()        # source stage — nothing to persist on its own
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         raise ValueError(

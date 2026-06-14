@@ -65,6 +65,15 @@ def _short(value) -> str:
     return s if len(s) <= 40 else "…" + s[-39:]
 
 
+def cmd_help(args) -> None:
+    from .help import render_action, render_index
+
+    if args.action:
+        print(render_action(args.action))
+    else:
+        print(render_index())
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="video_editor", description="YAML-driven video/audio pipeline.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -96,6 +105,10 @@ def main(argv=None) -> None:
     add_common(p_list)
     p_list.add_argument("--vars", nargs="*", metavar="K=V", help=argparse.SUPPRESS)
     p_list.set_defaults(func=cmd_list)
+
+    p_help = sub.add_parser("help", help="Document actions and their parameters/outputs")
+    p_help.add_argument("action", nargs="?", help="Action to describe (omit to list all actions)")
+    p_help.set_defaults(func=cmd_help)
 
     args = parser.parse_args(argv)
     args.func(args)

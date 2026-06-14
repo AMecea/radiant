@@ -24,26 +24,27 @@ Examples
   # pipe sink: compress a stream to a file
   - action: shell
     with: { cmd: "zstd -q -o {output} -", output: master.mkv.zst }
-
-Params:
-  cmd     : shell command to run (required); ``{output}`` → resolved output path
-  output  : output filename; when set, produced as ``file`` and tracked for resume
-
-Outputs:
-  file : absolute path to ``output`` (only when ``output`` is set)
 """
 
 import subprocess
 import sys
 from pathlib import Path
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 class ShellStep(Step):
     action = "shell"
-    produces = ("file",)
-    artifacts = ("file",)
+    summary = "Run an arbitrary shell command, standalone or as a pipe stage."
+    params = (
+        Param("cmd", "Shell command (run via `sh -c`); `{output}` is replaced with "
+                     "the resolved output path.", required=True),
+        Param("output", "Output filename; when set, produced as `file` and tracked "
+                        "for resume.", type="path"),
+    )
+    outputs = (
+        Output("file", "Absolute path to `output` (only when `output` is set).", artifact=True),
+    )
 
     def _resolve(self, params: dict, ctx: StepContext, out: Path | None) -> str:
         cmd = str(self.require(params, "cmd"))

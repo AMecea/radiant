@@ -2,9 +2,6 @@
 
 Handles both standard containers (ffmpeg directly) and Blackmagic RAW
 (``braw-decode | ffmpeg`` pipe, kept internal to this step).
-
-Outputs:
-  file : absolute path to the encoded mp4
 """
 
 import subprocess
@@ -19,7 +16,7 @@ from ..media import (
     is_braw,
     video_codec_args,
 )
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 def _audio_input(audio_path: Path, audio_trim: float) -> list[str]:
@@ -91,8 +88,30 @@ def _encode_braw(video, audio, out, offset, audio_trim, hw, crf, preset, bitrate
 
 class EncodeStep(Step):
     action = "encode"
-    produces = ("file",)
-    artifacts = ("file",)
+    summary = "Seek to the sync offset, replace audio with the mic, re-encode (BRAW-aware)."
+    params = (
+        Param("video", "Source video (standard container or .braw).", type="path", required=True),
+        Param("audio", "Mic audio to mux in place of the camera track.", type="path", required=True),
+        Param("output", "Output filename written under the step dir.", required=True),
+        Param("offset", "Seconds to seek the video forward (from a sync step).",
+              type="float", default=0.0),
+        Param("audio_trim", "Seconds to trim off the start of the mic audio (from a sync step).",
+              type="float", default=0.0),
+        Param("hw", "Use the VideoToolbox hardware H.264 encoder instead of libx264.",
+              type="bool", default=False),
+        Param("crf", "libx264 quality (lower = better); software encoder only.",
+              type="int", default=18),
+        Param("preset", "libx264 speed/efficiency preset; software encoder only.", default="slow"),
+        Param("video_bitrate", "Target bitrate for the hardware encoder.", default="8M"),
+        Param("test_duration", "Encode only this many seconds (overridden by --preview).",
+              type="int"),
+        Param("braw_threads", "braw-decode --threads (BRAW input only).", type="int", default=2),
+        Param("braw_scale", "braw-decode --scale, decode downscale factor (BRAW input only).",
+              type="int", default=1),
+    )
+    outputs = (
+        Output("file", "Absolute path to the encoded mp4.", artifact=True),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         video = Path(self.require(params, "video"))

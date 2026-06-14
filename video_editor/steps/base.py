@@ -1,10 +1,64 @@
-"""Step contract and execution context."""
+"""Step contract and execution context.
+
+Every step declares its inputs and outputs *uniformly* via :class:`Param` and
+:class:`Output` specs (the ``params`` / ``outputs`` class attributes). Those
+declarations are the single source of truth: the runner derives ``produces`` and
+``artifacts`` from them, plan validation checks required params against them, and
+``video_editor help <action>`` renders its documentation from them. Document each
+parameter right where it is declared (the ``Param.description``) — not in prose
+that can drift.
+"""
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+# Sentinel: a Param with no default (distinct from ``default=None``, which means
+# "the default value is None").
+_NO_DEFAULT = object()
+
+
+@dataclass(frozen=True)
+class Param:
+    """One input parameter a step reads from its ``with:`` block.
+
+    - ``name``        : the YAML key under ``with:``
+    - ``description`` : what it does (rendered verbatim by ``help``)
+    - ``type``        : display hint — ``str``/``int``/``float``/``bool``/``path``/
+                        ``list``/``ranges``/``enum`` (purely informational)
+    - ``required``    : when True, the plan fails validation if the key is absent
+    - ``default``     : the value used when omitted (shown by ``help``; leave unset
+                        for required params or params with no meaningful default)
+    - ``choices``     : allowed values, for ``type="enum"``
+    """
+
+    name: str
+    description: str
+    type: str = "str"
+    required: bool = False
+    default: object = _NO_DEFAULT
+    choices: tuple = ()
+
+    @property
+    def has_default(self) -> bool:
+        return self.default is not _NO_DEFAULT
+
+
+@dataclass(frozen=True)
+class Output:
+    """One value a step records in state for later steps to reference.
+
+    - ``name``        : the output key (referenced as ``${steps.<id>.<name>}``)
+    - ``description`` : what it holds
+    - ``artifact``    : True when it's a filesystem path the runner can check for
+                        staleness (a deleted artifact triggers a rebuild)
+    """
+
+    name: str
+    description: str
+    artifact: bool = False
 
 
 class PauseSignal(Exception):
@@ -55,18 +109,41 @@ class StepContext:
 class Step:
     """Base class for a pipeline action.
 
-    Subclasses set ``action`` (the YAML ``action:`` name) and ``produces`` (the
-    output keys the step writes to state), and implement ``run``.
+    Subclasses declare, uniformly:
+
+    - ``action``  : the YAML ``action:`` name
+    - ``summary`` : a one-line description (shown by ``video_editor help``)
+    - ``params``  : the ``Param`` specs the step reads from its ``with:`` block
+    - ``outputs`` : the ``Output`` specs the step records in state
+
+    and implement ``run``. ``produces`` / ``artifacts`` are *derived* from
+    ``outputs`` (see ``produced_keys`` / ``artifact_keys``) — declare an output
+    once and the rest follows.
     """
 
     action: str = ""
-    produces: tuple[str, ...] = ()
-    # Subset of ``produces`` that are filesystem paths — used by the runner to
-    # detect when a "done" step's artifact has been deleted and must be rebuilt.
-    artifacts: tuple[str, ...] = ()
+    summary: str = ""
+    params: tuple[Param, ...] = ()
+    outputs: tuple[Output, ...] = ()
+
+    # -- derived spec views (single source of truth = ``outputs``) -----------
+
+    @classmethod
+    def produced_keys(cls) -> tuple[str, ...]:
+        """Output keys the step writes to state (for plan reference validation)."""
+        return tuple(o.name for o in cls.outputs)
+
+    @classmethod
+    def artifact_keys(cls) -> tuple[str, ...]:
+        """Output keys that are filesystem paths (for staleness detection)."""
+        return tuple(o.name for o in cls.outputs if o.artifact)
+
+    @classmethod
+    def required_params(cls) -> tuple[str, ...]:
+        return tuple(p.name for p in cls.params if p.required)
 
     def run(self, params: dict, ctx: StepContext) -> dict:
-        """Execute the step. Return a dict whose keys are exactly ``produces``."""
+        """Execute the step. Return a dict whose keys are exactly ``produced_keys``."""
         raise NotImplementedError
 
     def command(self, params: dict, ctx: StepContext, *, upstream: dict | None = None,

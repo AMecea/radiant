@@ -1,8 +1,7 @@
 """sync step — detect the time offset between camera audio and the speaker-mic.
 
-Outputs:
-  offset      : seconds to seek the video forward so it lines up with the mic (>= 0)
-  audio_trim  : seconds to trim off the START of the mic audio when it leads the video
+Cross-correlates the first ``analysis_duration`` seconds of each track at a low
+sample rate to find where the mic recording lines up with the camera audio.
 """
 
 import subprocess
@@ -11,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from ..media import ANALYSIS_SR, is_braw
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 def _extract_audio_for_analysis(video_path: Path, out_path: Path, duration: int, start: float = 0.0) -> None:
@@ -56,7 +55,19 @@ def _find_offset(video_audio_path: Path, ref_audio_path: Path, duration: int) ->
 
 class SyncStep(Step):
     action = "sync"
-    produces = ("offset", "audio_trim")
+    summary = "Detect the time offset between camera audio and the speaker-mic."
+    params = (
+        Param("video", "Camera video (or BRAW) whose audio is the reference track.",
+              type="path", required=True),
+        Param("audio", "Speaker-mic recording to align against the video.",
+              type="path", required=True),
+        Param("analysis_duration", "Seconds of each track to analyse (longer = more robust, slower).",
+              type="int", default=600),
+    )
+    outputs = (
+        Output("offset", "Seconds to seek the video forward so it lines up with the mic (>= 0)."),
+        Output("audio_trim", "Seconds to trim off the START of the mic audio when it leads the video."),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         video = Path(self.require(params, "video"))

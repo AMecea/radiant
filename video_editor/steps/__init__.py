@@ -1,6 +1,6 @@
 """Action registry: maps a plan's ``action:`` name to its Step implementation."""
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 from .braw_decode import BrawDecodeStep
 from .clip import ClipStep
 from .encode import EncodeStep
@@ -33,12 +33,20 @@ def get_step(action: str) -> Step:
 
 def produces_for(action: str) -> tuple[str, ...]:
     """Output keys an action declares (for plan reference validation)."""
-    return REGISTRY[action].produces if action in REGISTRY else ()
+    return REGISTRY[action].produced_keys() if action in REGISTRY else ()
 
 
 def artifacts_for(action: str) -> tuple[str, ...]:
     """Output keys that are filesystem paths (for staleness detection)."""
-    return REGISTRY[action].artifacts if action in REGISTRY else ()
+    return REGISTRY[action].artifact_keys() if action in REGISTRY else ()
 
 
-__all__ = ["Step", "StepContext", "REGISTRY", "get_step", "produces_for", "artifacts_for"]
+def required_params_for(action: str) -> tuple[str, ...]:
+    """Names of params an action requires (for static plan validation)."""
+    return REGISTRY[action].required_params() if action in REGISTRY else ()
+
+
+__all__ = [
+    "Step", "StepContext", "Param", "Output", "REGISTRY", "get_step",
+    "produces_for", "artifacts_for", "required_params_for",
+]

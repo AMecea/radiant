@@ -4,19 +4,20 @@ When reached in a normal run, it halts the pipeline cleanly (exit 0) and notifie
 the user that input is expected (e.g. read the transcript, pick reel timestamps,
 then resume with `--step <next>-`). In `--dry-run` / `--preview` it does not halt —
 those modes are meant to walk/produce the whole chain — it just prints a note.
-
-Produces nothing. Optional param:
-  message : text shown to the user when pausing
 """
 
-from .base import PauseSignal, Step, StepContext
+from .base import Param, PauseSignal, Step, StepContext
 
 DEFAULT_MESSAGE = "Manual input expected before continuing."
 
 
 class PauseStep(Step):
     action = "pause"
-    produces = ()
+    summary = "Manual checkpoint: halt the run cleanly (exit 0) for human input."
+    params = (
+        Param("message", "Text shown to the user when pausing.", default=DEFAULT_MESSAGE),
+    )
+    outputs = ()
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         message = params.get("message") or DEFAULT_MESSAGE

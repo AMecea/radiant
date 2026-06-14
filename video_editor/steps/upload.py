@@ -1,19 +1,27 @@
 """upload step — rclone copy an artifact to a remote, optionally public-read.
 
-Outputs:
-  url : public URL (when public:true), else the remote destination
+Skipped under ``--preview`` (returns an empty url).
 """
 
 import sys
 from pathlib import Path
 
 from ..media import rclone_copy
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 class UploadStep(Step):
     action = "upload"
-    produces = ("url",)
+    summary = "rclone-copy a local file to a remote, optionally public-read."
+    params = (
+        Param("file", "Local file to upload.", type="path", required=True),
+        Param("remote", "rclone remote destination, e.g. 'gs:bucket/dir/'.", required=True),
+        Param("public", "Set a public-read ACL and return the public URL.",
+              type="bool", default=False),
+    )
+    outputs = (
+        Output("url", "Public URL when public:true, else the remote destination."),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         file = Path(self.require(params, "file"))

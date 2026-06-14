@@ -7,21 +7,13 @@ no intermediate on disk, but the whole pipe runs as one unit and re-runs each ti
 (there's no local artifact to resume from).
 
 Pipe-only — ``rcat`` needs a stdin stream, so ``run`` (standalone) raises with guidance.
-
-Params:
-  remote   : rclone remote directory, e.g. "gs:bucket/video/reels/"   (required)
-  filename : object name to write at the remote                        (required)
-  public   : set a public-read ACL and return the public URL (default false)
-
-Produces (as a pipe sink):
-  url : public URL when public:true, else the remote destination
 """
 
 import sys
 from pathlib import Path
 
 from ..media import public_url
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 def _dest(remote: str, filename: str) -> str:
@@ -41,8 +33,16 @@ def _acl_args(remote: str, public: bool) -> list[str]:
 
 class UploadStreamStep(Step):
     action = "upload_stream"
-    produces = ("url",)
-    artifacts = ()
+    summary = "Stream a pipe's output straight to a remote via `rclone rcat` (pipe-only sink)."
+    params = (
+        Param("remote", "rclone remote directory, e.g. 'gs:bucket/video/reels/'.", required=True),
+        Param("filename", "Object name to write at the remote.", required=True),
+        Param("public", "Set a public-read ACL and return the public URL.",
+              type="bool", default=False),
+    )
+    outputs = (
+        Output("url", "Public URL when public:true, else the remote destination."),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         raise ValueError(

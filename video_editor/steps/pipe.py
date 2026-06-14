@@ -12,26 +12,27 @@ A pipe runs as **one unit**. It deliberately cannot be resumed at a sub-stage â€
 there are no intermediate artifacts, only the byte stream. If the output is
 deleted (or the sink produces no file) the whole pipe re-runs. (Use separate plan
 steps for per-stage resume; use a pipe for streaming with no large intermediate.)
-
-Params:
-  output : final output filename, when the sink writes a file        (optional)
-  stages : ordered list of stage specs, each ``{action, with}``      (required, >= 2)
-
-Outputs (whichever the sink reports):
-  file : absolute path to the sink's output file (file sinks), or
-  url  : remote destination / public URL (streaming-upload sinks)
 """
 
 import subprocess
 import sys
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 class PipeStep(Step):
     action = "pipe"
-    produces = ("file", "url")
-    artifacts = ("file",)   # only file sinks are resumable; url-only pipes re-run
+    summary = "Run a sequence of stage actions connected by OS pipes, as one unit."
+    params = (
+        Param("stages", "Ordered list of stage specs (each `{action, with}`), >= 2. "
+                        "First = source, last = sink.", type="list", required=True),
+        Param("output", "Final output filename, when the sink writes a file.", type="path"),
+    )
+    # Whichever the sink reports. Only file sinks are resumable; url-only pipes re-run.
+    outputs = (
+        Output("file", "Absolute path to the sink's output file (file sinks).", artifact=True),
+        Output("url", "Remote destination / public URL (streaming-upload sinks)."),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         from . import get_step  # lazy: avoids a circular import with the registry

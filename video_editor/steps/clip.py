@@ -1,7 +1,8 @@
 """clip step — cut a segment, optionally crop to 9:16 (static or face-tracked).
 
-Outputs:
-  file : absolute path to the clipped mp4
+With ``track_face`` the speaker is detected per-sampled-frame, the crop window is
+smoothed, and a 1080x1920 vertical clip is rendered; otherwise a static crop (for
+``crop_format: tiktok``) or a plain cut is produced.
 """
 
 import subprocess
@@ -10,7 +11,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 _MODEL_DIR = Path.home() / ".cache" / "video-radiant"
 _PROTO_NAME = "deploy.prototxt"
@@ -165,8 +166,25 @@ def _build_filter(fmt: str) -> str | None:
 
 class ClipStep(Step):
     action = "clip"
-    produces = ("file",)
-    artifacts = ("file",)
+    summary = "Cut a segment, optionally crop to 9:16 (static or face-tracked)."
+    params = (
+        Param("input", "Source video to clip from.", type="path", required=True),
+        Param("start", "Clip start time (seconds or HH:MM:SS).", required=True),
+        Param("end", "Clip end time (ignored under --preview, which caps to N seconds).",
+              required=True),
+        Param("output", "Output filename written under the step dir.", required=True),
+        Param("track_face", "Detect and follow the speaker's face for a 9:16 crop.",
+              type="bool", default=False),
+        Param("crop_format", "Static crop preset when not face-tracking.",
+              type="enum", choices=("default", "tiktok"), default="default"),
+        Param("track_sample", "Face-track: detect every Nth frame (interpolate between).",
+              type="int", default=10),
+        Param("track_sigma", "Face-track: Gaussian smoothing width for the crop path.",
+              type="float", default=30.0),
+    )
+    outputs = (
+        Output("file", "Absolute path to the clipped mp4.", artifact=True),
+    )
 
     def run(self, params: dict, ctx: StepContext) -> dict:
         input_path = Path(self.require(params, "input"))

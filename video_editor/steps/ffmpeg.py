@@ -10,50 +10,62 @@ Two ways to use it:
   track — which is how a ``braw_decode | ffmpeg`` pipe reproduces the ``encode``
   step's behaviour. ffmpeg is always a *sink* (it writes a file, never stdout).
 
-For anything not exposed here, drop raw flags into ``extra_args``.
-
-Params (all optional except input/output; input may instead come from a pipe):
-  input         : source media path (omit when piped)
-  output        : output filename (standalone only; the pipe passes the path)
-  start         : -ss seek, e.g. "00:01:30" or 90      (before -i, fast seek; file input only)
-  end           : -to end time                          (mutually exclusive with duration)
-  duration      : -t, encode only this many seconds
-  include       : list of time ranges to KEEP (drop the rest); each {start,end} or
-                  [start,end], seconds or clock strings. Cuts video+audio together
-                  via select/aselect (re-encode required; not for vcodec/acodec copy).
-  exclude       : list of time ranges to DROP (keep the rest)   (use only one of include/exclude)
-  vcodec        : -c:v   (default libx264; use "copy" to stream-copy video)
-  crf           : -crf   (quality, lower = better; emitted only when set)
-  preset        : -preset (encoder speed/efficiency; emitted only when set)
-  video_bitrate : -b:v   (e.g. "8M"; takes precedence over crf when set)
-  pix_fmt       : -pix_fmt (e.g. "yuv420p")
-  acodec        : -c:a   (default aac; use "copy" to stream-copy audio)
-  audio_bitrate : -b:a   (default 192k)
-  no_audio      : -an, drop the audio track
-  audio         : a second input file to mux/replace as the audio track
-  audio_trim    : -ss applied before the `audio` input (seconds)
-  shortest      : finish at the shorter input (default true when `audio` is set)
-  fps           : -r, output frame rate
-  scale         : -vf scale=..., e.g. "1280:720" or "-2:720"
-  vf            : raw -vf filtergraph (overrides scale)
-  faststart     : -movflags +faststart for web playback (default true; mp4/mov only)
-  format        : -f, force a muxer/container
-  extra_args    : list of raw ffmpeg args appended verbatim (escape hatch)
-
-Outputs:
-  file : absolute path to the produced file
+For anything not exposed here, drop raw flags into ``extra_args``. Every parameter
+is documented at its declaration below.
 """
 
 import sys
 from pathlib import Path
 
-from .base import Step, StepContext
+from .base import Output, Param, Step, StepContext
 
 
 class FfmpegStep(Step):
     action = "ffmpeg"
-    produces = ("file",)
-    artifacts = ("file",)
+    summary = "General-purpose transcode/convert (and a `pipe` sink stage)."
+    params = (
+        Param("input", "Source media path. Omit when fed by an upstream pipe stage.",
+              type="path", required=True),
+        Param("output", "Output filename (standalone only; a pipe passes the path).",
+              required=True),
+        Param("start", "-ss seek before -i (fast keyframe seek); file input only.",
+              type="str"),
+        Param("end", "-to end time (mutually exclusive with duration).", type="str"),
+        Param("duration", "-t, encode only this many seconds (overridden by --preview).",
+              type="str"),
+        Param("include", "Time ranges to KEEP (drop the rest); each {start,end} or "
+                         "[start,end], seconds or clock strings. Cuts video+audio together "
+                         "(re-encode required). Use only one of include/exclude.",
+              type="ranges"),
+        Param("exclude", "Time ranges to DROP (keep the rest). Use only one of include/exclude.",
+              type="ranges"),
+        Param("vcodec", "-c:v ('copy' to stream-copy video).", default="libx264"),
+        Param("crf", "-crf quality (lower = better); emitted only when set.", type="int"),
+        Param("preset", "-preset encoder speed/efficiency; emitted only when set.", type="str"),
+        Param("video_bitrate", "-b:v (e.g. '8M'); takes precedence over crf when set.", type="str"),
+        Param("pix_fmt", "-pix_fmt (e.g. 'yuv420p').", type="str"),
+        Param("acodec", "-c:a ('copy' to stream-copy audio).", default="aac"),
+        Param("audio_bitrate", "-b:a.", default="192k"),
+        Param("no_audio", "-an, drop the audio track.", type="bool", default=False),
+        Param("audio", "A second input file to mux/replace as the audio track.", type="path"),
+        Param("audio_trim", "-ss applied before the `audio` input (seconds).",
+              type="float", default=0.0),
+        Param("shortest", "Finish at the shorter input (default true when `audio` is set).",
+              type="bool"),
+        Param("fps", "-r, output frame rate.", type="str"),
+        Param("scale", "-vf scale=..., e.g. '1280:720' or '-2:720'.", type="str"),
+        Param("vf", "Raw -vf filtergraph (overrides scale).", type="str"),
+        Param("faststart", "-movflags +faststart for web playback (mp4/mov only).",
+              type="bool", default=True),
+        Param("format", "-f, force a muxer/container.", type="str"),
+        Param("input_format", "-f for a generic upstream stdin stream (pipe stage only).",
+              type="str"),
+        Param("extra_args", "List of raw ffmpeg args appended verbatim (escape hatch).",
+              type="list"),
+    )
+    outputs = (
+        Output("file", "Absolute path to the produced file.", artifact=True),
+    )
 
     # -- shared command building --------------------------------------------
 

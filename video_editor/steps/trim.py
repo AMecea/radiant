@@ -14,28 +14,8 @@ copy`` are not allowed.
 Cuts may be written as ``{start, end}`` mappings or ``[start, end]`` pairs. Times
 are seconds (``90``, ``12.5``) or clock strings (``"00:01:30"``, ``"1:30"``).
 
-Params (besides include/exclude, all optional; share names/defaults with `ffmpeg`):
-  input    : source media path (omit when piped)
-  output   : output filename (standalone only; the pipe passes the path)
-  include  : list of ranges to KEEP        (mutually exclusive with exclude)
-  exclude  : list of ranges to DROP        (mutually exclusive with include)
-  vcodec   : -c:v   (default libx264; "copy" rejected — trim re-encodes)
-  crf      : -crf   (quality, lower = better; emitted only when set)
-  preset   : -preset
-  video_bitrate : -b:v (takes precedence over crf)
-  pix_fmt  : -pix_fmt
-  acodec   : -c:a   (default aac; "copy" rejected unless no_audio)
-  audio_bitrate : -b:a (default 192k)
-  no_audio : -an, drop audio (also skips the audio select)
-  fps      : -r, output frame rate
-  scale    : -vf scale=…   (applied after the cut)
-  vf       : extra -vf filtergraph appended after the cut (overrides scale)
-  faststart: -movflags +faststart (default true; mp4/mov)
-  format   : -f, force a muxer/container
-  extra_args : list of raw ffmpeg args appended verbatim
-
-Outputs:
-  file : absolute path to the produced file
+Besides the required cut, ``trim`` shares ``ffmpeg``'s encoding parameters (names,
+types, and defaults) — each is documented at its declaration below.
 
 Examples
   # keep two highlights, drop everything else
@@ -61,14 +41,41 @@ Examples
 import sys
 from pathlib import Path
 
-from .base import StepContext
+from .base import Output, Param, StepContext
 from .ffmpeg import FfmpegStep
 
 
 class TrimStep(FfmpegStep):
     action = "trim"
-    produces = ("file",)
-    artifacts = ("file",)
+    summary = "Keep or drop a list of time ranges in one gap-free ffmpeg pass."
+    params = (
+        Param("input", "Source media path. Omit when fed by an upstream pipe stage.",
+              type="path", required=True),
+        Param("output", "Output filename (standalone only; a pipe passes the path).",
+              required=True),
+        Param("include", "Ranges to KEEP (mutually exclusive with exclude). "
+                         "Give exactly one of include/exclude.", type="ranges"),
+        Param("exclude", "Ranges to DROP (mutually exclusive with include). "
+                         "Give exactly one of include/exclude.", type="ranges"),
+        Param("vcodec", "-c:v ('copy' rejected — trim always re-encodes).", default="libx264"),
+        Param("crf", "-crf quality (lower = better); emitted only when set.", type="int"),
+        Param("preset", "-preset encoder speed/efficiency.", type="str"),
+        Param("video_bitrate", "-b:v; takes precedence over crf.", type="str"),
+        Param("pix_fmt", "-pix_fmt.", type="str"),
+        Param("acodec", "-c:a ('copy' rejected unless no_audio).", default="aac"),
+        Param("audio_bitrate", "-b:a.", default="192k"),
+        Param("no_audio", "-an, drop audio (also skips the audio select).",
+              type="bool", default=False),
+        Param("fps", "-r, output frame rate.", type="str"),
+        Param("scale", "-vf scale=… applied after the cut.", type="str"),
+        Param("vf", "Extra -vf filtergraph appended after the cut (overrides scale).", type="str"),
+        Param("faststart", "-movflags +faststart (mp4/mov).", type="bool", default=True),
+        Param("format", "-f, force a muxer/container.", type="str"),
+        Param("extra_args", "List of raw ffmpeg args appended verbatim.", type="list"),
+    )
+    outputs = (
+        Output("file", "Absolute path to the produced file.", artifact=True),
+    )
 
     def _mode_label(self, params: dict) -> str:
         """Human label for the cut; also enforces that exactly one of
