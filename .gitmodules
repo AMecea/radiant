@@ -1,0 +1,3 @@
+[submodule "lib/braw-decode"]
+	path = lib/braw-decode
+	url = https://github.com/AMecea/braw-decode.git
