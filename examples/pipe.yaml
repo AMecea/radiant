@@ -1,0 +1,62 @@
+# Demonstrates the `pipe` step — a composed action built from OS pipes, the same
+# shape the built-in `encode` step uses internally (braw-decode | ffmpeg), but
+# expressed declaratively from reusable stages.
+#
+# This reproduces the `master` encode step of examples/1petru.yaml as:
+#     braw_decode (source) | ffmpeg (sink)
+# The built-in `encode` action is left untouched — this is an alternative way to
+# assemble the same result from smaller, composable pieces.
+#
+#   video_editor validate --plan examples/pipe.yaml
+#   video_editor run      --plan examples/pipe.yaml --step sync
+#   video_editor run      --plan examples/pipe.yaml --step master
+#
+# A pipe runs as ONE unit: it has no per-stage artifacts and can't be resumed
+# mid-pipe. Delete runs/<name>/master/ to rebuild the whole pipe.
+#
+# NOTE: actually running `master` needs the .braw source mounted and the
+# braw-decode binary at lib/braw-decode/braw-decode. `validate` / `--dry-run`
+# work without them.
+
+name: pipe_demo
+
+vars:
+  raw:       "/Volumes/RADIANT TM/A232_11230825_C006.braw"
+  ref_audio: "./resources/R_20260607-110727.wav"
+
+steps:
+  - id: sync                       # outputs: offset, audio_trim
+    action: sync
+    with:
+      video: "${vars.raw}"
+      audio: "${vars.ref_audio}"
+      analysis_duration: 600
+
+  - id: master                     # outputs: file — braw_decode | ffmpeg
+    action: pipe
+    needs: [sync]
+    with:
+      output: "1petru_5_1_5.mp4"
+      stages:
+        # Stage 1 (source): decode BRAW frames to a raw RGBA stream on stdout.
+        - action: braw_decode
+          with:
+            video: "${vars.raw}"
+            offset: "${steps.sync.offset}"   # seek handled by start frame
+            threads: 10
+            scale: 1
+        # Stage 2 (sink): read the raw stream, mux the mic audio, encode to mp4.
+        # These args reproduce `encode` with hw: true (VideoToolbox H.264 @ 8M).
+        - action: ffmpeg
+          with:
+            audio: "${vars.ref_audio}"
+            audio_trim: "${steps.sync.audio_trim}"
+            vcodec: h264_videotoolbox
+            video_bitrate: 8M
+            pix_fmt: yuv420p
+            vf: "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+            acodec: aac
+            audio_bitrate: 192k
+            faststart: true
+            shortest: true
+            extra_args: ["-allow_sw", "1", "-color_range", "tv"]

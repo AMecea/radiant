@@ -1,15 +1,20 @@
 """Action registry: maps a plan's ``action:`` name to its Step implementation."""
 
 from .base import Step, StepContext
+from .braw_decode import BrawDecodeStep
 from .clip import ClipStep
 from .encode import EncodeStep
 from .ffmpeg import FfmpegStep
 from .pause import PauseStep
+from .pipe import PipeStep
 from .sync import SyncStep
 from .transcribe import TranscribeStep
 from .upload import UploadStep
 
-_STEP_CLASSES = [SyncStep, EncodeStep, ClipStep, TranscribeStep, UploadStep, PauseStep, FfmpegStep]
+_STEP_CLASSES = [
+    SyncStep, EncodeStep, ClipStep, TranscribeStep, UploadStep,
+    PauseStep, FfmpegStep, BrawDecodeStep, PipeStep,
+]
 
 REGISTRY: dict[str, type[Step]] = {cls.action: cls for cls in _STEP_CLASSES}
 

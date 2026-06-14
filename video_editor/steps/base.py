@@ -69,6 +69,20 @@ class Step:
         """Execute the step. Return a dict whose keys are exactly ``produces``."""
         raise NotImplementedError
 
+    def command(self, params: dict, ctx: StepContext, *,
+                upstream: dict | None = None, out: Path | None = None) -> tuple[list, dict]:
+        """Build an argv for use as a stage inside a ``pipe`` step.
+
+        - ``upstream``: metadata from the previous stage (e.g. ffmpeg input args
+          describing its stdout), or ``None`` for the first stage.
+        - ``out``: the output file path when this stage is the pipe's *sink*
+          (last stage); ``None`` otherwise (the stage must write to stdout).
+
+        Returns ``(argv, meta)`` where ``meta`` is handed to the next stage.
+        Steps that can't be piped leave this unimplemented.
+        """
+        raise NotImplementedError(f"action '{self.action}' cannot be used as a `pipe` stage")
+
     # -- small param helpers shared by steps ---------------------------------
 
     @staticmethod

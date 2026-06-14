@@ -29,11 +29,17 @@ uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s p
 - **`--dry-run`** prints every command (and hook) without executing; **`--vars k=v`** overrides plan vars for one run.
 - **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
-Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `transcribe` (Whisper timestamps), `upload` (rclone), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pause` (manual checkpoint). See `examples/1petru.yaml` and `examples/ffmpeg.yaml`.
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `transcribe` (Whisper timestamps), `upload` (rclone), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes) + `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). See `examples/1petru.yaml`, `examples/ffmpeg.yaml`, and `examples/pipe.yaml`.
 
 ### `ffmpeg` — general-purpose transcode / convert
 
-The plain ffmpeg escape hatch (no sync/braw logic): one input, one output, and the common knobs — `vcodec`/`acodec` (or `copy` to stream-copy), `crf`, `preset`, `video_bitrate`/`audio_bitrate`, `scale`, `vf`, `fps`, `start`/`end`/`duration`, `no_audio`, `faststart` (mp4/mov only), `format`, plus an `extra_args` list for raw flags. Handy for downscales, trims, audio extraction, gif previews, and remuxes; honours `--preview` (caps to N seconds). See `examples/ffmpeg.yaml` for transcode / trim / extract-audio / gif samples.
+The plain ffmpeg escape hatch (no sync/braw logic): one input, one output, and the common knobs — `vcodec`/`acodec` (or `copy` to stream-copy), `crf`, `preset`, `video_bitrate`/`audio_bitrate`, `scale`, `vf`, `fps`, `start`/`end`/`duration`, `no_audio`, `audio` (mux a separate audio track), `pix_fmt`, `faststart` (mp4/mov only), `format`, plus an `extra_args` list for raw flags. Handy for downscales, trims, audio extraction, gif previews, and remuxes; honours `--preview` (caps to N seconds). See `examples/ffmpeg.yaml` for transcode / trim / extract-audio / gif samples.
+
+### `pipe` — compose stages via OS pipes
+
+`pipe` chains several actions into a single streaming command (`stage1 | stage2 | …`), the same shape `encode` uses internally (`braw-decode | ffmpeg`) but assembled declaratively from reusable stages. The first stage is a **source** (writes stdout), the last is the **sink** (writes the `output` file); geometry/format metadata flows from one stage to the next (e.g. `braw_decode` tells `ffmpeg` the rawvideo size + fps). A stage opts in by implementing `Step.command`; today `braw_decode` (source) and `ffmpeg` (sink) do.
+
+A pipe runs as **one unit** — no intermediate file lands on disk, so there's nothing to resume mid-pipe; if the output is deleted the whole pipe re-runs. Use a pipe when you want streaming with no large throwaway intermediate; use separate plan steps when you want per-stage resume. `examples/pipe.yaml` reproduces the `master` encode as `braw_decode | ffmpeg` (the built-in `encode` action is unchanged).
 
 ### `pause` — manual checkpoints
 
