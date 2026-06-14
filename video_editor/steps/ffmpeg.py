@@ -18,6 +18,10 @@ Params (all optional except input/output; input may instead come from a pipe):
   start         : -ss seek, e.g. "00:01:30" or 90      (before -i, fast seek; file input only)
   end           : -to end time                          (mutually exclusive with duration)
   duration      : -t, encode only this many seconds
+  include       : list of time ranges to KEEP (drop the rest); each {start,end} or
+                  [start,end], seconds or clock strings. Cuts video+audio together
+                  via select/aselect (re-encode required; not for vcodec/acodec copy).
+  exclude       : list of time ranges to DROP (keep the rest)   (use only one of include/exclude)
   vcodec        : -c:v   (default libx264; use "copy" to stream-copy video)
   crf           : -crf   (quality, lower = better; emitted only when set)
   preset        : -preset (encoder speed/efficiency; emitted only when set)
@@ -60,6 +64,52 @@ class FfmpegStep(Step):
         trim = float(params.get("audio_trim", 0.0) or 0.0)
         return (["-ss", f"{trim:.3f}"] if trim > 0 else []) + ["-i", str(audio)]
 
+    # -- include/exclude cut -------------------------------------------------
+
+    @staticmethod
+    def _to_seconds(value) -> float:
+        """Accept seconds (int/float/str) or a clock string HH:MM:SS(.ms)/MM:SS."""
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if ":" in s:
+            secs = 0.0
+            for part in s.split(":"):
+                secs = secs * 60 + float(part)
+            return secs
+        return float(s)
+
+    def _cut_bounds(self, cut) -> tuple[float, float]:
+        if isinstance(cut, dict):
+            start, end = cut.get("start"), cut.get("end")
+            if start is None or end is None:
+                raise ValueError("each cut needs both 'start' and 'end'")
+        elif isinstance(cut, (list, tuple)) and len(cut) == 2:
+            start, end = cut
+        else:
+            raise ValueError("each cut must be a {start, end} mapping or an [start, end] pair")
+        s, e = self._to_seconds(start), self._to_seconds(end)
+        if e <= s:
+            raise ValueError(f"cut end ({end}) must be after start ({start})")
+        return s, e
+
+    def _select_expr(self, params: dict) -> str | None:
+        """The (a)select expression for include/exclude, or None when neither is set."""
+        include, exclude = params.get("include"), params.get("exclude")
+        if include is None and exclude is None:
+            return None
+        if include is not None and exclude is not None:
+            raise ValueError("use only one of 'include' or 'exclude'")
+        cuts = include if include is not None else exclude
+        if not isinstance(cuts, list) or not cuts:
+            raise ValueError("'include'/'exclude' must be a non-empty list of cuts")
+        bounds = [self._cut_bounds(c) for c in cuts]
+        if include is not None:
+            # Keep a frame if it falls inside ANY kept range.
+            return "+".join(f"between(t,{s:g},{e:g})" for s, e in bounds)
+        # Keep a frame only if it falls outside EVERY dropped range.
+        return "*".join(f"not(between(t,{s:g},{e:g}))" for s, e in bounds)
+
     def _output_args(self, params: dict, ctx: StepContext, *, has_audio: bool,
                      to_stdout: bool = False) -> list[str]:
         """Everything after the inputs: maps, codecs, filters, container, trim.
@@ -79,6 +129,18 @@ class FfmpegStep(Step):
         fps = params.get("fps")
         scale = params.get("scale")
         vf = params.get("vf") or (f"scale={scale}" if scale else None)
+
+        # include/exclude: prepend a select cut to the video filter chain (the
+        # matching audio aselect is appended as -af below). Re-encode is required.
+        cut = self._select_expr(params)
+        if cut:
+            if str(vcodec).lower() == "copy":
+                raise ValueError("include/exclude cut needs a re-encode (select); remove 'vcodec: copy'")
+            if not no_audio and str(acodec).lower() == "copy":
+                raise ValueError("include/exclude cut needs a re-encode (aselect); remove 'acodec: copy' or set 'no_audio: true'")
+            select = f"select='{cut}',setpts=N/FRAME_RATE/TB"
+            vf = f"{select},{vf}" if vf else select
+
         faststart = self.as_bool(params.get("faststart"), default=True)
         shortest = self.as_bool(params.get("shortest"), default=has_audio)
         fmt = params.get("format")
@@ -138,6 +200,8 @@ class FfmpegStep(Step):
         elif end is not None:
             args += ["-to", str(end)]
         args += [str(a) for a in extra_args]
+        if cut and not no_audio:
+            args += ["-af", f"aselect='{cut}',asetpts=N/SR/TB"]
         return args
 
     def _span_label(self, params: dict, ctx: StepContext) -> str:
@@ -151,6 +215,10 @@ class FfmpegStep(Step):
             parts.append(f"+{duration}s")
         elif end is not None:
             parts.append(f"to {end}")
+        if params.get("include") is not None:
+            parts.append(f"keep {len(params['include'])} range(s)")
+        elif params.get("exclude") is not None:
+            parts.append(f"drop {len(params['exclude'])} range(s)")
         return " ".join(parts) or "full"
 
     # -- standalone ----------------------------------------------------------

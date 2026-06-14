@@ -70,87 +70,19 @@ class TrimStep(FfmpegStep):
     produces = ("file",)
     artifacts = ("file",)
 
-    # -- cut parsing ---------------------------------------------------------
-
-    @staticmethod
-    def _to_seconds(value) -> float:
-        """Accept seconds (int/float/str) or a clock string HH:MM:SS(.ms)/MM:SS."""
-        if isinstance(value, (int, float)):
-            return float(value)
-        s = str(value).strip()
-        if ":" in s:
-            secs = 0.0
-            for part in s.split(":"):
-                secs = secs * 60 + float(part)
-            return secs
-        return float(s)
-
-    def _cut_bounds(self, cut) -> tuple[float, float]:
-        if isinstance(cut, dict):
-            start, end = cut.get("start"), cut.get("end")
-            if start is None or end is None:
-                raise ValueError("each cut needs both 'start' and 'end'")
-        elif isinstance(cut, (list, tuple)) and len(cut) == 2:
-            start, end = cut
-        else:
-            raise ValueError("each cut must be a {start, end} mapping or an [start, end] pair")
-        s, e = self._to_seconds(start), self._to_seconds(end)
-        if e <= s:
-            raise ValueError(f"cut end ({end}) must be after start ({start})")
-        return s, e
-
-    def _select_expr(self, params: dict) -> str:
-        """Build the (a)select expression that decides which frames survive."""
-        include, exclude = params.get("include"), params.get("exclude")
-        if (include is None) == (exclude is None):
-            raise ValueError("trim needs exactly one of 'include' or 'exclude'")
-        cuts = include if include is not None else exclude
-        if not isinstance(cuts, list) or not cuts:
-            raise ValueError("'include'/'exclude' must be a non-empty list of cuts")
-        bounds = [self._cut_bounds(c) for c in cuts]
-        if include is not None:
-            # Keep a frame if it falls inside ANY kept range.
-            return "+".join(f"between(t,{s:g},{e:g})" for s, e in bounds)
-        # Keep a frame only if it falls outside EVERY dropped range.
-        return "*".join(f"not(between(t,{s:g},{e:g}))" for s, e in bounds)
-
-    def _guard_codecs(self, params: dict) -> None:
-        if str(params.get("vcodec", "libx264")).lower() == "copy":
-            raise ValueError("trim must re-encode video (the select filter rewrites frames); remove 'vcodec: copy'")
-        if not self.as_bool(params.get("no_audio")) and str(params.get("acodec", "aac")).lower() == "copy":
-            raise ValueError("trim must re-encode audio (aselect); remove 'acodec: copy' or set 'no_audio: true'")
-
     def _mode_label(self, params: dict) -> str:
+        """Human label for the cut; also enforces that exactly one of
+        include/exclude is present (trim is meaningless without a cut)."""
         if params.get("include") is not None:
             return f"keep {len(params['include'])} range(s)"
-        return f"drop {len(params['exclude'])} range(s)"
+        if params.get("exclude") is not None:
+            return f"drop {len(params['exclude'])} range(s)"
+        raise ValueError("trim needs exactly one of 'include' or 'exclude'")
 
-    # -- command building (shared by standalone + pipe via FfmpegStep) -------
-
-    def _output_args(self, params: dict, ctx: StepContext, *, has_audio: bool,
-                     to_stdout: bool = False) -> list[str]:
-        """Fold the cut into the ffmpeg step's output args.
-
-        The video cut goes in front of any user scale/vf via ``-vf``; the matching
-        audio cut is appended as ``-af`` (unless audio is dropped). Everything else
-        — codecs, faststart, preview cap, extra_args — comes from ``FfmpegStep``.
-        """
-        self._guard_codecs(params)
-        expr = self._select_expr(params)
-
-        user_vf = params.get("vf") or (f"scale={params['scale']}" if params.get("scale") else None)
-        vchain = f"select='{expr}',setpts=N/FRAME_RATE/TB"
-        if user_vf:
-            vchain = f"{vchain},{user_vf}"
-
-        p = dict(params)
-        p["vf"] = vchain          # FfmpegStep emits this verbatim as -vf
-        p.pop("scale", None)      # already folded into the chain above
-
-        args = super()._output_args(p, ctx, has_audio=has_audio, to_stdout=to_stdout)
-        if not self.as_bool(params.get("no_audio")):
-            args += ["-af", f"aselect='{expr}',asetpts=N/SR/TB"]
-        return args
+    # The cut itself (parsing include/exclude → select/aselect, the copy-codec
+    # guard, clock-string parsing) lives in FfmpegStep now, so `trim` and the
+    # `ffmpeg` action share one implementation. trim only adds: a *required* cut
+    # and its own log line.
 
     # -- standalone ----------------------------------------------------------
 
@@ -159,6 +91,7 @@ class TrimStep(FfmpegStep):
         output_name = self.require(params, "output")
         out = ctx.out_path(output_name)
         audio = params.get("audio")
+        label = self._mode_label(params)        # also requires a cut to be given
 
         if not ctx.dry_run:
             if not input_path.exists():
@@ -173,10 +106,13 @@ class TrimStep(FfmpegStep):
         cmd += self._output_args(params, ctx, has_audio=bool(audio))
         cmd += [str(out)]
 
-        print(f"  trim ({self._mode_label(params)}) → {out}")
+        print(f"  trim ({label}) → {out}")
         ctx.run(cmd)
         return {"file": str(out.resolve())}
 
-    # As a pipe stage, trim inherits FfmpegStep.command (stdin/file wiring + sink);
-    # the cut is injected through the overridden _output_args above. We never set
-    # 'start', so no pre-input -ss is emitted to shift the select timeline.
+    def command(self, params: dict, ctx: StepContext, *, upstream: dict | None = None,
+                out: Path | None = None, is_last: bool = False) -> tuple[list, dict]:
+        # As a pipe stage, reuse FfmpegStep's wiring (stdin/file input + sink);
+        # FfmpegStep._output_args injects the cut. We just enforce a cut is given.
+        self._mode_label(params)
+        return super().command(params, ctx, upstream=upstream, out=out, is_last=is_last)
