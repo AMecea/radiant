@@ -332,7 +332,7 @@ class Plan:
             nxt = remaining[0]
             print(f"\n  {len(remaining)} step(s) remain: {', '.join(x.id for x in remaining)}")
             print(f"  When ready, resume with:")
-            print(f"      video_editor run --plan {self.path} --step {nxt.id}-")
+            print(f"      radiant run --plan {self.path} --step {nxt.id}-")
         else:
             print("\n  No further steps in this selection.")
         print(f"{bar}\n")

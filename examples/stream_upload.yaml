@@ -1,12 +1,12 @@
 # Demonstrates `upload_stream` — a pipe sink that streams straight to a remote via
 # `rclone rcat`, so the encode never lands a local file. This reproduces the
-# `master` + `upload_master` steps of examples/1petru.yaml as a SINGLE streamed pipe:
+# `master` + `upload_master` steps of examples/sample.yaml as a SINGLE streamed pipe:
 #
 #     braw_decode (source) | ffmpeg (encode → stdout) | upload_stream (rcat → bucket)
 #
-#   video_editor validate --plan examples/stream_upload.yaml
-#   video_editor run      --plan examples/stream_upload.yaml --step sync
-#   video_editor run      --plan examples/stream_upload.yaml --step master_upload
+#   radiant validate --plan examples/stream_upload.yaml
+#   radiant run      --plan examples/stream_upload.yaml --step sync
+#   radiant run      --plan examples/stream_upload.yaml --step master_upload
 #
 # Trade-off vs separate encode + upload steps: no 3 GB intermediate on disk, but
 # the pipe runs as one unit and re-runs each time (nothing local to resume from).

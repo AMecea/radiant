@@ -3,10 +3,10 @@
 # pieces play back gap-free. It re-encodes (select can't stream-copy) and works
 # standalone or as a `pipe` stage.
 #
-#   video_editor validate --plan examples/trim.yaml
-#   video_editor list     --plan examples/trim.yaml
-#   video_editor run      --plan examples/trim.yaml --step highlights
-#   video_editor run      --plan examples/trim.yaml --preview 5    # cap to 5s
+#   radiant validate --plan examples/trim.yaml
+#   radiant list     --plan examples/trim.yaml
+#   radiant run      --plan examples/trim.yaml --step highlights
+#   radiant run      --plan examples/trim.yaml --preview 5    # cap to 5s
 #
 # Artifacts land under ./runs/trim_demo/<step-id>/.
 

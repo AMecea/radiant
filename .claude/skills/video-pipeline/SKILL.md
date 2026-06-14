@@ -1,17 +1,17 @@
 ---
 name: video-pipeline
 description: >-
-  Author, validate, preview, and run video_editor pipeline plans in this repo —
+  Author, validate, preview, and run radiant pipeline plans in this repo —
   ffmpeg-based video editing (transcode, trim/cut, clip/crop) plus audio sync,
   Whisper transcription, and uploads (rclone remotes, YouTube). Use whenever the
   user wants to edit / process / transcode / trim / cut / clip / crop / sync /
-  transcribe / upload a video with this project's video_editor tool, or to
+  transcribe / upload a video with this project's radiant tool, or to
   create, validate, run, or preview a YAML plan or one of its steps.
 ---
 
 # video-pipeline
 
-`video_editor` runs an ordered YAML **plan** of steps. Each step has an `id`, an
+`radiant` runs an ordered YAML **plan** of steps. Each step has an `id`, an
 `action`, optional `needs`, and a `with:` parameter block; it writes artifacts to a
 persistent workdir, and later steps reference earlier outputs. Runs are resumable.
 
@@ -22,8 +22,8 @@ Each action's parameters and outputs are declared in code and rendered by the CL
 of truth and cannot drift.
 
 ```bash
-uv run video_editor help              # every action + one-line summary
-uv run video_editor help <action>    # one action's params (type/required/default) + outputs
+uv run radiant help              # every action + one-line summary
+uv run radiant help <action>    # one action's params (type/required/default) + outputs
 ```
 
 If the user names an effect ("make it vertical", "drop the intro", "speed it up"),
@@ -32,29 +32,29 @@ map it to an action via `help` rather than inventing flags.
 ## Workflow
 
 1. **Understand the request** and pick actions (`help` to confirm availability/params).
-2. **Author or edit the plan YAML.** Crib structure from `examples/` (`1petru.yaml` is
+2. **Author or edit the plan YAML.** Crib structure from `examples/` (`sample.yaml` is
    the full sync→encode→upload→transcribe→clip→upload flow; `ffmpeg.yaml`, `trim.yaml`,
    `pipe.yaml`, `youtube.yaml`, `shell.yaml`, `stream_upload.yaml` are focused samples).
 3. **Validate** — catches unknown actions, bad `${...}` refs, cycles, and missing
    required params *before* anything runs:
    ```bash
-   uv run video_editor validate --plan PATH
+   uv run radiant validate --plan PATH
    ```
 4. **Preview** the chain fast before committing to a long encode (caps long steps to a
    few seconds, prefixes outputs `preview_`, skips uploads, saves no state):
    ```bash
-   uv run video_editor run --plan PATH --preview        # 5s
-   uv run video_editor run --plan PATH --preview 10
+   uv run radiant run --plan PATH --preview        # 5s
+   uv run radiant run --plan PATH --preview 10
    ```
 5. **Run** — all steps, or a slice with `--step` (see selectors below):
    ```bash
-   uv run video_editor run --plan PATH
-   uv run video_editor run --plan PATH --step sync
-   uv run video_editor run --plan PATH --step reel-upload_reel
+   uv run radiant run --plan PATH
+   uv run radiant run --plan PATH --step sync
+   uv run radiant run --plan PATH --step reel-upload_reel
    ```
 6. **Inspect state** any time:
    ```bash
-   uv run video_editor list --plan PATH      # per-step status + outputs
+   uv run radiant list --plan PATH      # per-step status + outputs
    ```
 
 Use `--dry-run` on `run` to print every command (and hook) without executing — good
@@ -128,8 +128,5 @@ steps:
   `lib/braw-decode/braw-decode`; it's specific to Blackmagic RAW input.
 - **`upload`/`youtube`** are skipped under `--preview`; YouTube prompts for OAuth on
   first use and caches the token.
-- For one-off ad-hoc work without a plan, the thin wrapper scripts (`process_video.py`,
-  `clip.py`, `transcribe.py`) exist — see `docs/standalone-scripts.md` — but the plan
-  runner is canonical.
 
 After editing a plan, validate it; before a long encode, preview it.

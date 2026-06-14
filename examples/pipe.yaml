@@ -2,14 +2,14 @@
 # shape the built-in `encode` step uses internally (braw-decode | ffmpeg), but
 # expressed declaratively from reusable stages.
 #
-# This reproduces the `master` encode step of examples/1petru.yaml as:
+# This reproduces the `master` encode step of examples/sample.yaml as:
 #     braw_decode (source) | ffmpeg (sink)
 # The built-in `encode` action is left untouched — this is an alternative way to
 # assemble the same result from smaller, composable pieces.
 #
-#   video_editor validate --plan examples/pipe.yaml
-#   video_editor run      --plan examples/pipe.yaml --step sync
-#   video_editor run      --plan examples/pipe.yaml --step master
+#   radiant validate --plan examples/pipe.yaml
+#   radiant run      --plan examples/pipe.yaml --step sync
+#   radiant run      --plan examples/pipe.yaml --step master
 #
 # A pipe runs as ONE unit: it has no per-stage artifacts and can't be resumed
 # mid-pipe. Delete runs/<name>/master/ to rebuild the whole pipe.

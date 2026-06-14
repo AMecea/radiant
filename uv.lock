@@ -1139,6 +1139,35 @@ wheels = [
 ]
 
 [[package]]
+name = "radiant"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "faster-whisper" },
+    { name = "google-api-python-client" },
+    { name = "google-auth-oauthlib" },
+    { name = "librosa" },
+    { name = "numpy" },
+    { name = "opencv-python" },
+    { name = "pyyaml" },
+    { name = "scipy" },
+    { name = "tqdm" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "faster-whisper", specifier = ">=1.0" },
+    { name = "google-api-python-client", specifier = ">=2.0" },
+    { name = "google-auth-oauthlib", specifier = ">=1.0" },
+    { name = "librosa", specifier = ">=0.10.0" },
+    { name = "numpy", specifier = ">=1.24.0" },
+    { name = "opencv-python", specifier = ">=4.8" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "scipy", specifier = ">=1.10.0" },
+    { name = "tqdm", specifier = ">=4.65" },
+]
+
+[[package]]
 name = "requests"
 version = "2.33.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1485,33 +1514,4 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
-]
-
-[[package]]
-name = "video-radiant"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "faster-whisper" },
-    { name = "google-api-python-client" },
-    { name = "google-auth-oauthlib" },
-    { name = "librosa" },
-    { name = "numpy" },
-    { name = "opencv-python" },
-    { name = "pyyaml" },
-    { name = "scipy" },
-    { name = "tqdm" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "faster-whisper", specifier = ">=1.0" },
-    { name = "google-api-python-client", specifier = ">=2.0" },
-    { name = "google-auth-oauthlib", specifier = ">=1.0" },
-    { name = "librosa", specifier = ">=0.10.0" },
-    { name = "numpy", specifier = ">=1.24.0" },
-    { name = "opencv-python", specifier = ">=4.8" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "scipy", specifier = ">=1.10.0" },
-    { name = "tqdm", specifier = ">=4.65" },
 ]

@@ -4,7 +4,7 @@ Every step declares its inputs and outputs *uniformly* via :class:`Param` and
 :class:`Output` specs (the ``params`` / ``outputs`` class attributes). Those
 declarations are the single source of truth: the runner derives ``produces`` and
 ``artifacts`` from them, plan validation checks required params against them, and
-``video_editor help <action>`` renders its documentation from them. Document each
+``radiant help <action>`` renders its documentation from them. Document each
 parameter right where it is declared (the ``Param.description``) — not in prose
 that can drift.
 """
@@ -112,7 +112,7 @@ class Step:
     Subclasses declare, uniformly:
 
     - ``action``  : the YAML ``action:`` name
-    - ``summary`` : a one-line description (shown by ``video_editor help``)
+    - ``summary`` : a one-line description (shown by ``radiant help``)
     - ``params``  : the ``Param`` specs the step reads from its ``with:`` block
     - ``outputs`` : the ``Output`` specs the step records in state
 

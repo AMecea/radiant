@@ -1,4 +1,4 @@
-"""Command-line entry point: ``video_editor run | list | validate``."""
+"""Command-line entry point: ``radiant run | list | validate``."""
 
 import argparse
 import sys
@@ -75,7 +75,7 @@ def cmd_help(args) -> None:
 
 
 def main(argv=None) -> None:
-    parser = argparse.ArgumentParser(prog="video_editor", description="YAML-driven video/audio pipeline.")
+    parser = argparse.ArgumentParser(prog="radiant", description="YAML-driven video/audio pipeline.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_common(p):

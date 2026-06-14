@@ -1,10 +1,10 @@
 # The current real job (extract-video.sh + reel-video.sh) expressed as a plan.
 #
-#   video_editor validate --plan examples/1petru.yaml
-#   video_editor run      --plan examples/1petru.yaml --step sync
-#   video_editor run      --plan examples/1petru.yaml --step master
-#   video_editor run      --plan examples/1petru.yaml --step transcribe   # find reel timestamps
-#   video_editor run      --plan examples/1petru.yaml --step reel-upload_reel
+#   radiant validate --plan examples/sample.yaml
+#   radiant run      --plan examples/sample.yaml --step sync
+#   radiant run      --plan examples/sample.yaml --step master
+#   radiant run      --plan examples/sample.yaml --step transcribe   # find reel timestamps
+#   radiant run      --plan examples/sample.yaml --step reel-upload_reel
 #
 # Artifacts land under ./runs/1petru_5_1_5/<step-id>/ and survive between runs.
 

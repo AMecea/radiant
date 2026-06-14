@@ -1,7 +1,10 @@
 [project]
-name = "video-radiant"
+name = "radiant"
 version = "0.1.0"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Flavius Mecea", email = "flavius.mecea@icloud.com" }]
 dependencies = [
     "librosa>=0.10.0",
     "numpy>=1.24.0",
@@ -15,11 +18,11 @@ dependencies = [
 ]
 
 [project.scripts]
-video_editor = "video_editor.cli:main"
+radiant = "radiant.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["video_editor"]
+packages = ["radiant"]

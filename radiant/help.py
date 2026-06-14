@@ -1,7 +1,7 @@
 """Render action documentation from each step's declared ``params`` / ``outputs``.
 
 This is the single consumer of the uniform step spec for human-facing help. Both
-``video_editor help`` (the action index) and ``video_editor help <action>`` (one
+``radiant help`` (the action index) and ``radiant help <action>`` (one
 action's parameters and outputs) are built entirely from the declarations, so the
 docs can never drift from what the code actually reads.
 """
@@ -41,11 +41,11 @@ def action_summaries() -> list[tuple[str, str]]:
 
 
 def render_index() -> str:
-    """The ``video_editor help`` overview: every action and its one-liner."""
+    """The ``radiant help`` overview: every action and its one-liner."""
     rows = action_summaries()
     width = max((len(a) for a, _ in rows), default=0)
     lines = [
-        "Available actions (use `video_editor help <action>` for parameters):",
+        "Available actions (use `radiant help <action>` for parameters):",
         "",
     ]
     for action, summary in rows:

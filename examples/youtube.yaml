@@ -1,9 +1,9 @@
 # Demonstrates the `youtube` action — upload a finished video to YouTube with a
 # title and description via the YouTube Data API v3.
 #
-#   video_editor validate --plan examples/youtube.yaml
-#   video_editor run      --plan examples/youtube.yaml --step publish --dry-run
-#   video_editor run      --plan examples/youtube.yaml --step publish
+#   radiant validate --plan examples/youtube.yaml
+#   radiant run      --plan examples/youtube.yaml --step publish --dry-run
+#   radiant run      --plan examples/youtube.yaml --step publish
 #
 # `validate` / `--dry-run` need no credentials. A real upload needs a one-time
 # Google Cloud setup:

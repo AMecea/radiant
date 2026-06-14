@@ -2,10 +2,10 @@
 # basic parameters (no sync/braw magic). Useful for quick conversions, downscales,
 # trims, audio extraction, and stream-copy remuxes.
 #
-#   video_editor validate --plan examples/ffmpeg.yaml
-#   video_editor list     --plan examples/ffmpeg.yaml
-#   video_editor run      --plan examples/ffmpeg.yaml --step transcode
-#   video_editor run      --plan examples/ffmpeg.yaml --preview 5      # quick sanity check
+#   radiant validate --plan examples/ffmpeg.yaml
+#   radiant list     --plan examples/ffmpeg.yaml
+#   radiant run      --plan examples/ffmpeg.yaml --step transcode
+#   radiant run      --plan examples/ffmpeg.yaml --preview 5      # quick sanity check
 #
 # Artifacts land under ./runs/ffmpeg_demo/<step-id>/.
 

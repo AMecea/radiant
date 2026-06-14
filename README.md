@@ -1,4 +1,4 @@
-# video-radiant
+# Radiant
 
 A YAML-driven **ffmpeg video-editing pipeline** — transcode, cut/trim, crop/clip — with
 a few extra goodies built around it: automatic camera↔mic audio sync, Whisper
@@ -15,7 +15,7 @@ steps once and the runner executes it, resumably.
 > yourself (see [Requirements](#requirements)). If you don't shoot BRAW, ignore them —
 > everything else works on any container ffmpeg can read.
 
-## `video_editor` — the pipeline tool
+## `radiant` — the pipeline tool
 
 The whole flow (sync → encode → upload → transcribe → reel-clip → upload) is declared
 once in a YAML **plan**. Steps run a slice at a time and each writes output artifacts
@@ -23,18 +23,18 @@ into a persistent workdir, so later steps consume earlier steps' outputs by refe
 and runs are resumable.
 
 ```bash
-uv run video_editor validate --plan examples/1petru.yaml      # check refs, DAG, actions
-uv run video_editor run      --plan examples/1petru.yaml --step sync       # just step 1
-uv run video_editor run      --plan examples/1petru.yaml --step master     # heavy encode
-uv run video_editor run      --plan examples/1petru.yaml --step transcribe # find reel timestamps
-uv run video_editor run      --plan examples/1petru.yaml --step reel-upload_reel
-uv run video_editor list     --plan examples/1petru.yaml      # per-step status + outputs
+uv run radiant validate --plan examples/sample.yaml      # check refs, DAG, actions
+uv run radiant run      --plan examples/sample.yaml --step sync       # just step 1
+uv run radiant run      --plan examples/sample.yaml --step master     # heavy encode
+uv run radiant run      --plan examples/sample.yaml --step transcribe # find reel timestamps
+uv run radiant run      --plan examples/sample.yaml --step reel-upload_reel
+uv run radiant list     --plan examples/sample.yaml      # per-step status + outputs
 
-uv run video_editor help                  # list every action and its one-liner
-uv run video_editor help ffmpeg           # parameters + outputs for one action
+uv run radiant help                  # list every action and its one-liner
+uv run radiant help ffmpeg           # parameters + outputs for one action
 
-uv run video_editor run      --plan examples/1petru.yaml --preview      # 5s preview of the whole chain
-uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s preview
+uv run radiant run      --plan examples/sample.yaml --preview      # 5s preview of the whole chain
+uv run radiant run      --plan examples/sample.yaml --preview 10    # 10s preview
 ```
 
 - **Step selector** (`--step`): `N`, `N-M`, `N-`, `-M`, comma lists, step ids, and id ranges (`sync-reel`). Default = all.
@@ -45,9 +45,9 @@ uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s p
 - **`--dry-run`** prints every command (and hook) without executing; **`--vars k=v`** overrides plan vars for one run.
 - **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
-Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `transcribe` (Whisper timestamps), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `video_editor help` for the full list, or `video_editor help <action>` for one action's parameters. See `examples/1petru.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `transcribe` (Whisper timestamps), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `radiant help` for the full list, or `radiant help <action>` for one action's parameters. See `examples/sample.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
 
-Each action declares its parameters and outputs uniformly (the `params` / `outputs` specs on its step class), so `video_editor help <action>` documents every parameter — type, whether it's required, its default, and what it does — straight from the code. Required parameters are checked at `validate`/`run` time, and `${steps.<id>.<output>}` references are checked against the declared outputs.
+Each action declares its parameters and outputs uniformly (the `params` / `outputs` specs on its step class), so `radiant help <action>` documents every parameter — type, whether it's required, its default, and what it does — straight from the code. Required parameters are checked at `validate`/`run` time, and `${steps.<id>.<output>}` references are checked against the declared outputs.
 
 ### `ffmpeg` — general-purpose transcode / convert
 
@@ -57,7 +57,7 @@ The plain ffmpeg escape hatch (no sync/braw logic): one input, one output, and t
 
 Give `trim` **either** an `include` list (keep only those ranges) **or** an `exclude` list (keep everything else); each range is a `{start, end}` mapping or an `[start, end]` pair, in seconds (`90`, `12.5`) or clock strings (`"00:01:30"`, `"1:30"`). It cuts video and audio on the same expression in a single ffmpeg pass (`select`/`aselect` + `setpts`), so the kept pieces concatenate gap-free and stay in sync — no temp files or per-segment muxing. Because `select` rewrites frames it always re-encodes, so `vcodec: copy` / `acodec: copy` are rejected. It works standalone or as a `pipe` stage (source/filter/sink). See `examples/trim.yaml`.
 
-`trim` is just the `ffmpeg` action with a *required* `include`/`exclude` cut — both actions share one implementation, so you can also add `include`/`exclude` directly to any `ffmpeg` step (e.g. to cut while you encode/scale in a single pass, as the master pipe in `my_pipline_1petru.yaml` does).
+`trim` is just the `ffmpeg` action with a *required* `include`/`exclude` cut — both actions share one implementation, so you can also add `include`/`exclude` directly to any `ffmpeg` step (e.g. to cut while you encode/scale in a single pass).
 
 ### `pipe` — compose stages via OS pipes
 
@@ -81,7 +81,11 @@ The notice tells you exactly how to resume (`run … --step <next>-`). `pause` i
 
 ## Claude Code skill
 
-A [Claude Code](https://claude.com/claude-code) skill lives at `.claude/skills/video-pipeline/` — it teaches Claude how to author, validate, preview, and run plans with this tool. Working **inside this repo** it's picked up automatically (no install).
+A [Claude Code](https://claude.com/claude-code) skill lives at `.claude/skills/video-pipeline/` — it teaches Claude how to author, validate, preview, and run plans with this tool. Working **inside this repo** it's picked up automatically (no install). To use it from anywhere, install it as a personal skill:
+
+```bash
+mkdir -p ~/.claude/skills && cp -r .claude/skills/video-pipeline ~/.claude/skills/
+```
 
 Then in Claude Code just ask in plain language ("trim the intro off this clip", "transcribe and upload"), or invoke it explicitly with `/video-pipeline`.
 
@@ -100,9 +104,6 @@ Then in Claude Code just ask in plain language ("trim the intro off this clip", 
 
 Inputs can be any container ffmpeg reads (MP4, MOV, MXF, …); Blackmagic RAW (`.braw`) additionally needs the `braw-decode` binary above.
 
-## Standalone scripts & encoding-speed tuning
+## License
 
-`process_video.py`, `clip.py`, and `transcribe.py` remain as thin wrappers over the same
-step classes for quick ad-hoc use without writing a plan — the plan runner is the
-canonical interface. Their flags, encoding-speed options (hardware encoder, presets), and
-audio-sync notes live in **[docs/standalone-scripts.md](docs/standalone-scripts.md)**.
+[MIT](LICENSE) © Flavius Mecea

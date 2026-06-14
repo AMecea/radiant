@@ -2,8 +2,8 @@
 # stage of a `pipe` (source / filter / sink). The `{output}` token is replaced
 # with the step's resolved output path.
 #
-#   video_editor validate --plan examples/shell.yaml
-#   video_editor run      --plan examples/shell.yaml
+#   radiant validate --plan examples/shell.yaml
+#   radiant run      --plan examples/shell.yaml
 #
 # Artifacts land under ./runs/shell_demo/<step-id>/.
 
