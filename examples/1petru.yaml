@@ -1,0 +1,80 @@
+# The current real job (extract-video.sh + reel-video.sh) expressed as a plan.
+#
+#   video_editor validate --plan examples/1petru.yaml
+#   video_editor run      --plan examples/1petru.yaml --step sync
+#   video_editor run      --plan examples/1petru.yaml --step master
+#   video_editor run      --plan examples/1petru.yaml --step transcribe   # find reel timestamps
+#   video_editor run      --plan examples/1petru.yaml --step reel-upload_reel
+#
+# Artifacts land under ./runs/1petru_5_1_5/<step-id>/ and survive between runs.
+
+name: 1petru_5_1_5
+
+vars:
+  raw:       "/Volumes/RADIANT TM/A232_11230825_C006.braw"
+  ref_audio: "./resources/R_20260607-110727.wav"
+  bucket:    "gs:project-files-1"
+  video_dir: "gs:project-files-1/video/2026-06-14-02/"
+  reels_dir: "gs:project-files-1/video/reels/"
+
+# Optional shell hooks — put your caffeinate / telegram piping here.
+hooks:
+  on_start:   "caffeinate -dimsu -w $$ &"
+  on_success: "echo '{name}: done -> {url}' | telegram send"
+  on_failure: "echo '{name}: step {step} failed (exit {code})' | telegram send"
+
+steps:
+  - id: sync                       # outputs: offset, audio_trim
+    action: sync
+    with:
+      video: "${vars.raw}"
+      audio: "${vars.ref_audio}"
+      analysis_duration: 600
+
+  - id: master                     # outputs: file
+    action: encode
+    needs: [sync]
+    with:
+      video: "${vars.raw}"
+      audio: "${vars.ref_audio}"
+      offset: "${steps.sync.offset}"
+      audio_trim: "${steps.sync.audio_trim}"
+      hw: true
+      braw_threads: 10
+      output: "1petru_5_1_5.mp4"
+      # test_duration: 30          # uncomment for a quick sanity encode
+
+  - id: upload_master              # outputs: url
+    action: upload
+    needs: [master]
+    with:
+      file: "${steps.master.file}"
+      remote: "${vars.video_dir}"
+      public: true
+
+  - id: transcribe                 # outputs: transcript (start<TAB>end<TAB>text)
+    action: transcribe
+    needs: [master]
+    with:
+      input: "${steps.master.file}"
+      language: ro
+
+  - id: reel                       # outputs: file
+    action: clip
+    needs: [master]
+    with:
+      input: "${steps.master.file}"
+      start: "00:20:25.80"
+      end: "00:22:25.50"
+      track_face: true
+      track_sample: 5
+      track_sigma: 20
+      output: "1petru_5_1_5_preaiubitilor.mp4"
+
+  - id: upload_reel                # outputs: url
+    action: upload
+    needs: [reel]
+    with:
+      file: "${steps.reel.file}"
+      remote: "${vars.reels_dir}"
+      public: true

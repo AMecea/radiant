@@ -2,6 +2,40 @@
 
 Processes large event/concert videos: automatically syncs a speaker-mic audio recording with the camera video, trims the video to match, replaces the camera audio with the better-quality speaker-mic audio, re-encodes to YouTube-ready H.264 1080p, and optionally uploads via rclone.
 
+## `video_editor` — the pipeline tool
+
+The whole flow (sync → encode → upload → transcribe → reel-clip → upload) is declared
+once in a YAML **plan**. Steps run a slice at a time and each writes output artifacts
+into a persistent workdir, so later steps consume earlier steps' outputs by reference
+and runs are resumable.
+
+```bash
+uv run video_editor validate --plan examples/1petru.yaml      # check refs, DAG, actions
+uv run video_editor run      --plan examples/1petru.yaml --step sync       # just step 1
+uv run video_editor run      --plan examples/1petru.yaml --step master     # heavy encode
+uv run video_editor run      --plan examples/1petru.yaml --step transcribe # find reel timestamps
+uv run video_editor run      --plan examples/1petru.yaml --step reel-upload_reel
+uv run video_editor list     --plan examples/1petru.yaml      # per-step status + outputs
+
+uv run video_editor run      --plan examples/1petru.yaml --preview      # 5s preview of the whole chain
+uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s preview
+```
+
+- **Step selector** (`--step`): `N`, `N-M`, `N-`, `-M`, comma lists, step ids, and id ranges (`sync-reel`). Default = all.
+- **Artifacts & state:** outputs land under `runs/<plan-name>/<step-id>/`; `state.json` records each step's outputs. Referenced as `${steps.<id>.<output>}` and `${vars.<key>}` in the plan.
+- **Resumable / idempotent:** a finished step is skipped on re-run unless its artifact was deleted (then it rebuilds) or you pass `--force`.
+- **Fail-fast:** running a step whose upstream artifact doesn't exist yet errors with guidance instead of doing the wrong thing.
+- **`--preview [SECONDS]`** (default 5): caps the long steps (`encode`, `clip`, `transcribe`) to a few seconds so you can sanity-check sync/framing/timestamps fast. Outputs are written `preview_`-prefixed, uploads are skipped, and **state is not saved** — so the preview never blocks or gets mistaken for the real run. Re-run it as many times as you like; a later full run (without `--preview`) still does everything from scratch.
+- **`--dry-run`** prints every command (and hook) without executing; **`--vars k=v`** overrides plan vars for one run.
+- **Hooks:** optional `on_start` / `on_success` / `on_failure` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}` placeholders) — put `caffeinate` / `telegram` piping there.
+
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `transcribe` (Whisper timestamps), `upload` (rclone). See `examples/1petru.yaml`.
+
+The standalone scripts below (`process_video.py`, `clip.py`, `transcribe.py`) remain as thin
+wrappers over the same step logic for ad-hoc use; the plan runner is the canonical interface.
+
+---
+
 ## What it does
 
 1. **Extracts** the first 10 minutes of the camera's audio track

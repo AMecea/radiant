@@ -1,0 +1,32 @@
+"""Action registry: maps a plan's ``action:`` name to its Step implementation."""
+
+from .base import Step, StepContext
+from .clip import ClipStep
+from .encode import EncodeStep
+from .sync import SyncStep
+from .transcribe import TranscribeStep
+from .upload import UploadStep
+
+_STEP_CLASSES = [SyncStep, EncodeStep, ClipStep, TranscribeStep, UploadStep]
+
+REGISTRY: dict[str, type[Step]] = {cls.action: cls for cls in _STEP_CLASSES}
+
+
+def get_step(action: str) -> Step:
+    if action not in REGISTRY:
+        known = ", ".join(sorted(REGISTRY))
+        raise KeyError(f"unknown action '{action}' (known actions: {known})")
+    return REGISTRY[action]()
+
+
+def produces_for(action: str) -> tuple[str, ...]:
+    """Output keys an action declares (for plan reference validation)."""
+    return REGISTRY[action].produces if action in REGISTRY else ()
+
+
+def artifacts_for(action: str) -> tuple[str, ...]:
+    """Output keys that are filesystem paths (for staleness detection)."""
+    return REGISTRY[action].artifacts if action in REGISTRY else ()
+
+
+__all__ = ["Step", "StepContext", "REGISTRY", "get_step", "produces_for", "artifacts_for"]

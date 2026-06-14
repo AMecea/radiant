@@ -1,45 +1,38 @@
-#!/usr/bin/env -S uv run
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#   "faster-whisper",
-#   "tqdm",
-# ]
-# ///
+#!/usr/bin/env python3
+"""Thin wrapper around the video_editor transcribe step.
 
+Kept for ad-hoc use. The canonical interface is now `video_editor run --plan ...`;
+the real logic lives in video_editor/steps/transcribe.py. Writes a sibling
+``<input>.txt`` with ``start<TAB>end<TAB>text`` lines.
+
+Usage:
+    uv run transcribe.py <audio.wav> [--language ro] [--model turbo]
+"""
+
+import argparse
 import sys
-import wave
 from pathlib import Path
-from faster_whisper import WhisperModel
-from tqdm import tqdm
+
+from video_editor.steps.base import StepContext
+from video_editor.steps.transcribe import TranscribeStep
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: transcribe.py <audio.wav>", file=sys.stderr)
-        sys.exit(1)
+def main() -> None:
+    p = argparse.ArgumentParser(description="Transcribe audio/video with Whisper.")
+    p.add_argument("input")
+    p.add_argument("--language", default="ro")
+    p.add_argument("--model", default="turbo")
+    args = p.parse_args()
 
-    audio_path = sys.argv[1]
-    output_path = Path(audio_path).with_suffix(".txt")
+    input_path = Path(args.input)
+    if not input_path.exists():
+        sys.exit(f"Error: input file not found: {input_path}")
 
-    print("Loading whisper large model...", file=sys.stderr)
-    model = WhisperModel("turbo", device="auto", compute_type="auto")
-
-    with wave.open(audio_path) as wf:
-        duration = wf.getnframes() / wf.getframerate()
-
-    print(f"Transcribing {audio_path}...", file=sys.stderr)
-    segments, info = model.transcribe(audio_path, language="ro")
-
-    print(f"Detected language: {info.language} (probability: {info.language_probability:.2f})", file=sys.stderr)
-
-    with open(output_path, "w") as f, tqdm(total=duration, unit="s", unit_scale=True, desc="Transcribing") as pbar:
-        for segment in segments:
-            f.write(f"{segment.start:.6f}\t{segment.end:.6f}\t{segment.text.strip()}\n")
-            f.flush()
-            pbar.update(segment.end - pbar.n)
-
-    print(f"Labels written to {output_path}", file=sys.stderr)
+    ctx = StepContext(step_id=input_path.stem, workdir=Path("."), out_dir=input_path.parent or Path("."))
+    out = TranscribeStep().run(
+        {"input": input_path, "language": args.language, "model": args.model}, ctx
+    )
+    print(f"Transcript: {out['transcript']}")
 
 
 if __name__ == "__main__":
