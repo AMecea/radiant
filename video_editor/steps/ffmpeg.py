@@ -60,8 +60,14 @@ class FfmpegStep(Step):
         trim = float(params.get("audio_trim", 0.0) or 0.0)
         return (["-ss", f"{trim:.3f}"] if trim > 0 else []) + ["-i", str(audio)]
 
-    def _output_args(self, params: dict, ctx: StepContext, *, has_audio: bool) -> list[str]:
-        """Everything after the inputs: maps, codecs, filters, container, trim."""
+    def _output_args(self, params: dict, ctx: StepContext, *, has_audio: bool,
+                     to_stdout: bool = False) -> list[str]:
+        """Everything after the inputs: maps, codecs, filters, container, trim.
+
+        ``to_stdout`` builds a streamable output (for a non-final ``pipe`` stage
+        writing to ``pipe:1``): faststart is impossible on a non-seekable pipe, so
+        mp4/mov get fragmented (``+frag_keyframe+empty_moov``) and a format is forced.
+        """
         vcodec = params.get("vcodec", "libx264")
         crf = params.get("crf")
         preset = params.get("preset")
@@ -77,6 +83,9 @@ class FfmpegStep(Step):
         shortest = self.as_bool(params.get("shortest"), default=has_audio)
         fmt = params.get("format")
         extra_args = params.get("extra_args") or []
+        if to_stdout:
+            faststart = False           # can't move the moov atom on a non-seekable pipe
+            fmt = fmt or "mp4"
 
         end = params.get("end")
         duration = params.get("duration")
@@ -114,7 +123,10 @@ class FfmpegStep(Step):
         else:
             args += ["-c:a", str(acodec), "-b:a", str(audio_bitrate)]
 
-        if faststart:
+        mp4_family = (fmt or "").lower() in ("mp4", "mov", "m4v", "m4a", "3gp")
+        if to_stdout and mp4_family:
+            args += ["-movflags", "+frag_keyframe+empty_moov"]
+        elif faststart:
             args += ["-movflags", "+faststart"]
         if shortest:
             args += ["-shortest"]
@@ -168,27 +180,45 @@ class FfmpegStep(Step):
         ctx.run(cmd)
         return {"file": str(out.resolve())}
 
-    # -- pipe stage (sink) ---------------------------------------------------
+    # -- pipe stage ----------------------------------------------------------
 
-    def command(self, params: dict, ctx: StepContext, *,
-                upstream: dict | None = None, out: Path | None = None) -> tuple[list, dict]:
-        if out is None:
-            raise ValueError("ffmpeg can only be the final (sink) stage of a pipe — it writes a file, not stdout")
+    def command(self, params: dict, ctx: StepContext, *, upstream: dict | None = None,
+                out: Path | None = None, is_last: bool = False) -> tuple[list, dict]:
         audio = params.get("audio")
         if audio and not ctx.dry_run and not Path(audio).exists():
             sys.exit(f"Error: audio file not found: {audio}")
 
         cmd: list = ["ffmpeg", "-y"]
-        if upstream and upstream.get("input_args"):
-            cmd += [str(a) for a in upstream["input_args"]]   # e.g. -f rawvideo … -i pipe:0
+        if upstream is not None:
+            # Fed by an upstream stage → read its stdout.
+            if upstream.get("input_args"):
+                cmd += [str(a) for a in upstream["input_args"]]   # e.g. -f rawvideo … -i pipe:0
+            else:
+                # Generic upstream (e.g. a shell source): read pipe:0; user names the format.
+                informat = params.get("input_format")
+                if informat:
+                    cmd += ["-f", str(informat)]
+                cmd += ["-i", "pipe:0"]
         else:
-            # No upstream stream → behave like a normal file input.
+            # First stage → behave like a normal file input.
             input_path = Path(self.require(params, "input"))
             start = params.get("start")
             if start is not None:
                 cmd += ["-ss", str(start)]
             cmd += ["-i", str(input_path)]
         cmd += self._audio_input(params)
-        cmd += self._output_args(params, ctx, has_audio=bool(audio))
-        cmd += [str(out)]
+
+        if is_last:
+            if out is None:
+                raise ValueError(
+                    "ffmpeg as the final pipe stage needs an 'output' (set the pipe's 'output', "
+                    "or use a streaming sink like upload_stream)"
+                )
+            cmd += self._output_args(params, ctx, has_audio=bool(audio))
+            cmd += [str(out)]
+            return cmd, {}
+
+        # Non-final stage → stream a fragmented/streamable container to stdout.
+        cmd += self._output_args(params, ctx, has_audio=bool(audio), to_stdout=True)
+        cmd += ["pipe:1"]
         return cmd, {}

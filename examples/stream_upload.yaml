@@ -1,0 +1,62 @@
+# Demonstrates `upload_stream` — a pipe sink that streams straight to a remote via
+# `rclone rcat`, so the encode never lands a local file. This reproduces the
+# `master` + `upload_master` steps of examples/1petru.yaml as a SINGLE streamed pipe:
+#
+#     braw_decode (source) | ffmpeg (encode → stdout) | upload_stream (rcat → bucket)
+#
+#   video_editor validate --plan examples/stream_upload.yaml
+#   video_editor run      --plan examples/stream_upload.yaml --step sync
+#   video_editor run      --plan examples/stream_upload.yaml --step master_upload
+#
+# Trade-off vs separate encode + upload steps: no 3 GB intermediate on disk, but
+# the pipe runs as one unit and re-runs each time (nothing local to resume from).
+# `--preview` writes a short local preview file instead of uploading.
+#
+# NOTE: a real run needs the .braw mounted, braw-decode at lib/braw-decode/, and
+# rclone configured for the remote. `validate` / `--dry-run` work without them.
+
+name: stream_demo
+
+vars:
+  raw:       "/Volumes/RADIANT TM/A232_11230825_C006.braw"
+  ref_audio: "./resources/R_20260607-110727.wav"
+  video_dir: "gs:project-files-1/video/2026-06-14-02/"
+
+steps:
+  - id: sync                       # outputs: offset, audio_trim
+    action: sync
+    with:
+      video: "${vars.raw}"
+      audio: "${vars.ref_audio}"
+      analysis_duration: 600
+
+  - id: master_upload              # outputs: url — decode | encode | rcat, all streamed
+    action: pipe
+    needs: [sync]
+    with:
+      # no 'output': the sink streams to the remote, nothing lands locally
+      stages:
+        - action: braw_decode
+          with:
+            video: "${vars.raw}"
+            offset: "${steps.sync.offset}"
+            threads: 10
+            scale: 1
+        - action: ffmpeg          # encodes to a fragmented mp4 on stdout (streamable)
+          with:
+            audio: "${vars.ref_audio}"
+            audio_trim: "${steps.sync.audio_trim}"
+            vcodec: h264_videotoolbox
+            video_bitrate: 8M
+            pix_fmt: yuv420p
+            vf: "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+            acodec: aac
+            audio_bitrate: 192k
+            format: mp4
+            shortest: true
+            extra_args: ["-allow_sw", "1", "-color_range", "tv"]
+        - action: upload_stream   # rclone rcat → remote object
+          with:
+            remote: "${vars.video_dir}"
+            filename: "1petru_5_1_5.mp4"
+            public: true

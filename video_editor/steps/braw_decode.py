@@ -43,8 +43,8 @@ class BrawDecodeStep(Step):
             "`pipe` step (e.g. braw_decode | ffmpeg), not as a standalone action."
         )
 
-    def command(self, params: dict, ctx: StepContext, *,
-                upstream: dict | None = None, out: Path | None = None) -> tuple[list, dict]:
+    def command(self, params: dict, ctx: StepContext, *, upstream: dict | None = None,
+                out: Path | None = None, is_last: bool = False) -> tuple[list, dict]:
         if upstream is not None:
             raise ValueError("braw_decode must be the first stage of a pipe — it is a source, it has no input stream")
         video = Path(self.require(params, "video"))

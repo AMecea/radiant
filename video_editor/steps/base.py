@@ -69,17 +69,21 @@ class Step:
         """Execute the step. Return a dict whose keys are exactly ``produces``."""
         raise NotImplementedError
 
-    def command(self, params: dict, ctx: StepContext, *,
-                upstream: dict | None = None, out: Path | None = None) -> tuple[list, dict]:
+    def command(self, params: dict, ctx: StepContext, *, upstream: dict | None = None,
+                out: Path | None = None, is_last: bool = False) -> tuple[list, dict]:
         """Build an argv for use as a stage inside a ``pipe`` step.
 
         - ``upstream``: metadata from the previous stage (e.g. ffmpeg input args
           describing its stdout), or ``None`` for the first stage.
-        - ``out``: the output file path when this stage is the pipe's *sink*
-          (last stage); ``None`` otherwise (the stage must write to stdout).
+        - ``out``: the output file path when this stage is a file *sink*, else
+          ``None`` (the stage writes to stdout, or is a non-file sink).
+        - ``is_last``: True when this is the pipe's final stage. A non-final
+          stage must write to stdout; the final stage consumes the pipe.
 
-        Returns ``(argv, meta)`` where ``meta`` is handed to the next stage.
-        Steps that can't be piped leave this unimplemented.
+        Returns ``(argv, meta)`` handed to the next stage. The *last* stage may
+        return ``meta["produces"]`` (a dict) to set the pipe's outputs; otherwise
+        the pipe records ``{"file": out}``. Steps that can't be piped leave this
+        unimplemented.
         """
         raise NotImplementedError(f"action '{self.action}' cannot be used as a `pipe` stage")
 

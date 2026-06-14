@@ -1,0 +1,48 @@
+# Demonstrates the `shell` action — an arbitrary command, standalone or as any
+# stage of a `pipe` (source / filter / sink). The `{output}` token is replaced
+# with the step's resolved output path.
+#
+#   video_editor validate --plan examples/shell.yaml
+#   video_editor run      --plan examples/shell.yaml
+#
+# Artifacts land under ./runs/shell_demo/<step-id>/.
+
+name: shell_demo
+
+vars:
+  source: "./test_1petru_5_1_5.mp4"
+
+steps:
+  - id: probe                      # standalone: write ffprobe JSON to a tracked file
+    action: shell
+    with:
+      cmd: "ffprobe -v quiet -print_format json -show_format ${vars.source} > {output}"
+      output: probe.json
+
+  - id: gz                         # pipe: shell source | gzip filter | shell sink
+    action: pipe
+    with:
+      output: "head.bin.gz"
+      stages:
+        - action: shell
+          with: { cmd: "head -c 1000000 ${vars.source}" }   # source → stdout
+        - action: shell
+          with: { cmd: "gzip" }                             # filter: stdin → stdout
+        - action: shell
+          with: { cmd: "cat > {output}" }                   # sink: stdin → file
+
+  - id: transcode                  # pipe: shell source | ffmpeg (stream) | shell sink
+    action: pipe                   # shows ffmpeg reading pipe:0 and writing pipe:1
+    with:
+      output: "shrunk_480p.mp4"
+      stages:
+        - action: shell
+          with: { cmd: "cat ${vars.source}" }               # source → stdout
+        - action: ffmpeg
+          with:                                             # filter: transcode, stream out
+            vcodec: libx264
+            crf: 28
+            scale: "-2:480"
+            format: mp4
+        - action: shell
+          with: { cmd: "cat > {output}" }                   # sink: stdin → file
