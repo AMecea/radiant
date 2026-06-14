@@ -1,6 +1,19 @@
 # video-radiant
 
-Processes large event/concert videos: automatically syncs a speaker-mic audio recording with the camera video, trims the video to match, replaces the camera audio with the better-quality speaker-mic audio, re-encodes to YouTube-ready H.264 1080p, and optionally uploads via rclone.
+A YAML-driven **ffmpeg video-editing pipeline** — transcode, cut/trim, crop/clip — with
+a few extra goodies built around it: automatic camera↔mic audio sync, Whisper
+transcription, and uploads (rclone remotes and YouTube). You declare an ordered plan of
+steps once and the runner executes it, resumably.
+
+> **Built entirely with [Claude Code](https://claude.com/claude-code).** This is a
+> personal tool — I make it public in case it's useful, but it's shaped around my own
+> workflow rather than as a general-purpose product.
+
+> **`braw_decode` is a personal need, not a general feature.** I shoot on a Blackmagic
+> camera, so I needed to decode Blackmagic RAW (`.braw`). The `braw_decode` step and the
+> BRAW-aware `encode` path exist for that and depend on a `braw-decode` binary you supply
+> yourself (see [Requirements](#requirements)). If you don't shoot BRAW, ignore them —
+> everything else works on any container ffmpeg can read.
 
 ## `video_editor` — the pipeline tool
 
@@ -17,6 +30,9 @@ uv run video_editor run      --plan examples/1petru.yaml --step transcribe # fin
 uv run video_editor run      --plan examples/1petru.yaml --step reel-upload_reel
 uv run video_editor list     --plan examples/1petru.yaml      # per-step status + outputs
 
+uv run video_editor help                  # list every action and its one-liner
+uv run video_editor help ffmpeg           # parameters + outputs for one action
+
 uv run video_editor run      --plan examples/1petru.yaml --preview      # 5s preview of the whole chain
 uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s preview
 ```
@@ -29,7 +45,9 @@ uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s p
 - **`--dry-run`** prints every command (and hook) without executing; **`--vars k=v`** overrides plan vars for one run.
 - **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
-Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `transcribe` (Whisper timestamps), `upload` (rclone), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes) + `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). See `examples/1petru.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, and `examples/pipe.yaml`.
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `transcribe` (Whisper timestamps), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `video_editor help` for the full list, or `video_editor help <action>` for one action's parameters. See `examples/1petru.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
+
+Each action declares its parameters and outputs uniformly (the `params` / `outputs` specs on its step class), so `video_editor help <action>` documents every parameter — type, whether it's required, its default, and what it does — straight from the code. Required parameters are checked at `validate`/`run` time, and `${steps.<id>.<output>}` references are checked against the declared outputs.
 
 ### `ffmpeg` — general-purpose transcode / convert
 
@@ -61,21 +79,11 @@ Drop a `pause` step where you need to do something by hand (e.g. read the transc
 
 The notice tells you exactly how to resume (`run … --step <next>-`). `pause` is not recorded in state, so it always halts a normal run — you step over it by selecting the steps after it. In `--dry-run` and `--preview` it does **not** halt (those modes are meant to walk/produce the whole chain) — it just prints a note.
 
-The standalone scripts below (`process_video.py`, `clip.py`, `transcribe.py`) remain as thin
-wrappers over the same step logic for ad-hoc use; the plan runner is the canonical interface.
+## Claude Code skill
 
----
+A [Claude Code](https://claude.com/claude-code) skill lives at `.claude/skills/video-pipeline/` — it teaches Claude how to author, validate, preview, and run plans with this tool. Working **inside this repo** it's picked up automatically (no install).
 
-## What it does
-
-1. **Extracts** the first 10 minutes of the camera's audio track
-2. **Cross-correlates** it against the speaker-mic recording to find the time offset automatically
-3. **Seeks** the video to that offset (or trims the audio if the mic started slightly before the camera)
-4. **Replaces** the camera audio with the speaker-mic recording
-5. **Re-encodes** to H.264 1080p MP4 (YouTube-optimised: yuv420p, AAC 192k, faststart)
-6. **Uploads** to any rclone remote (Google Drive, S3, etc.)
-
-Supported input formats: any container ffmpeg can read (MP4, MOV, MXF, …) plus Blackmagic RAW (`.braw`) via `braw-decode`.
+Then in Claude Code just ask in plain language ("trim the intro off this clip", "transcribe and upload"), or invoke it explicitly with `/video-pipeline`.
 
 ## Requirements
 
@@ -85,155 +93,16 @@ Supported input formats: any container ffmpeg can read (MP4, MOV, MXF, …) plus
 |---|---|
 | `uv` | `brew install uv` |
 | `ffmpeg` (with libx264 + VideoToolbox) | `brew install ffmpeg` |
-| `rclone` | `brew install rclone` |
-| `braw-decode` | Place binary at `lib/braw-decode/braw-decode` |
+| `rclone` (for `upload`) | `brew install rclone` |
+| `braw-decode` (only for BRAW) | Place binary at `lib/braw-decode/braw-decode` |
 
 **Python dependencies** are declared inline (PEP 723) and installed automatically by `uv` on first run — no manual `pip install` needed.
 
-## Usage
+Inputs can be any container ffmpeg reads (MP4, MOV, MXF, …); Blackmagic RAW (`.braw`) additionally needs the `braw-decode` binary above.
 
-```
-uv run process_video.py <video> <audio> --output <path> [options]
-```
+## Standalone scripts & encoding-speed tuning
 
-### Basic example
-
-```bash
-uv run process_video.py /Volumes/Drive/event.braw speaker_mic.wav --output event_final.mp4
-```
-
-### Test encode (2 minutes only)
-
-```bash
-uv run process_video.py /Volumes/Drive/event.braw speaker_mic.wav \
-  --output test.mp4 --test-duration 2
-```
-
-### Full run with upload
-
-```bash
-uv run process_video.py /Volumes/Drive/event.braw speaker_mic.wav \
-  --output event_final.mp4 --upload "gdrive:Videos/2026/"
-```
-
-### Skip encode, upload existing file
-
-```bash
-uv run process_video.py /Volumes/Drive/event.braw speaker_mic.wav \
-  --output event_final.mp4 --skip-encode --upload "gdrive:Videos/2026/"
-```
-
-### Manual sync offset (skips auto-detect)
-
-```bash
-uv run process_video.py /Volumes/Drive/event.braw speaker_mic.wav \
-  --output event_final.mp4 --offset 42.5
-```
-
-## All options
-
-| Flag | Default | Description |
-|---|---|---|
-| `video` | *(required)* | Source video file path |
-| `audio` | *(required)* | Speaker-mic audio file path |
-| `--output` / `-o` | *(required)* | Output file path |
-| `--offset` | auto-detect | Manual sync offset in seconds; skips cross-correlation |
-| `--upload` | — | rclone remote path, e.g. `gdrive:Videos/` |
-| `--skip-encode` | off | Skip encode step, only upload |
-| `--test-duration` | — | Encode only N minutes (quick sanity check) |
-| `--analysis-duration` | 600 | Seconds of audio used for sync detection |
-| `--hw` | off | Use VideoToolbox hardware encoder (see Speed below) |
-| `--video-bitrate` | `8M` | Bitrate for hardware encoding (YouTube 1080p = 8 Mbps) |
-| `--crf` | 18 | libx264 quality (lower = better; ignored with `--hw`) |
-| `--preset` | `slow` | libx264 preset (ignored with `--hw`) |
-
-## Speed options
-
-Encoding a 2-hour 4K BRAW video is the bottleneck. Three ways to go faster:
-
-### 1. Hardware encoder — biggest win (10–20× faster)
-
-```bash
-uv run process_video.py video.braw audio.wav --output out.mp4 --hw
-```
-
-Uses macOS VideoToolbox to encode H.264 on the GPU/media engine instead of the CPU. Quality is bitrate-controlled (`--video-bitrate`, default `8M`) rather than CRF. 8 Mbps is YouTube's recommended upload bitrate for 1080p SDR — quality is indistinguishable after YouTube re-encodes.
-
-```bash
-# Higher bitrate for more headroom before YouTube re-encodes:
-uv run process_video.py video.braw audio.wav --output out.mp4 --hw --video-bitrate 16M
-```
-
-### 2. Faster software preset — moderate win (3–5× faster than default)
-
-```bash
-uv run process_video.py video.braw audio.wav --output out.mp4 --preset fast
-```
-
-libx264 `slow` preset is the default for maximum compression efficiency, but YouTube re-encodes the upload anyway so the difference in final quality is negligible. `fast` or `medium` is a good trade-off.
-
-### 3. Both together (not applicable — `--hw` replaces libx264 entirely)
-
-`--hw` and `--preset`/`--crf` are mutually exclusive: hardware encoding ignores preset and CRF.
-
-### Comparison
-
-| Mode | Relative speed | Quality control |
-|---|---|---|
-| `--preset slow` (default) | 1× baseline | CRF 18 (lossless-looking) |
-| `--preset fast` | ~4× | CRF 18 |
-| `--hw` | ~15× | 8 Mbps bitrate |
-| `--hw --video-bitrate 16M` | ~15× | 16 Mbps bitrate |
-
-## Clipping (`clip.py`)
-
-Cut a segment from any video, with optional TikTok-format cropping.
-
-```
-uv run clip.py <input> -s HH:MM:SS -e HH:MM:SS [--crop-format default|tiktok] [--track-face]
-```
-
-### Crop formats
-
-| `--crop-format` | Description |
-|---|---|
-| `default` | Keeps original resolution and aspect ratio |
-| `tiktok` | Static center crop → 1080×1920 (9:16) |
-
-### Face tracking (`--track-face`)
-
-Detects the face every N frames with OpenCV's DNN detector (Caffe SSD res10, ~10 MB,
-downloaded automatically on first use to `~/.cache/video-radiant/`), interpolates
-positions between samples, smooths the trajectory with a Gaussian filter, then
-re-encodes with a per-frame 9:16 crop centered on the face.
-
-`--track-face` is independent of `--crop-format` — it always produces a 9:16 output
-centered on the detected face.
-
-```bash
-# face-tracked 9:16 clip
-uv run clip.py talk.mp4 -s 0:05:00 -e 0:05:30 --track-face
-
-# detect every 5th frame, faster response to movement
-uv run clip.py talk.mp4 -s 0:05:00 -e 0:05:30 --track-face --track-sample 5 --track-sigma 10
-
-# very smooth pan (good for slow walkers)
-uv run clip.py talk.mp4 -s 0:05:00 -e 0:05:30 --track-face --track-sigma 60
-```
-
-#### Tuning flags
-
-| Flag | Default | Effect |
-|---|---|---|
-| `--track-sample N` | `10` | Detect face every N frames; lower = more accurate, slower |
-| `--track-sigma S` | `30` | Gaussian smoothing in frames (~1.2 s at 25 fps); lower = follows movement faster, higher = smoother/less jitter |
-
-**Rule of thumb:** lower `--track-sigma` when the subject moves quickly and you want the
-frame to keep up; raise it when movement is slow and jitter is the bigger problem.
-
-## Audio sync notes
-
-- Auto-detect analyses the **first 10 minutes** of the video audio via FFT cross-correlation against the speaker-mic recording.
-- If the detected offset is between **-30 s and 0**: the audio is trimmed from the start instead of seeking the video.
-- If the offset is beyond -30 s, detection is considered unreliable — use `--offset` manually.
-- The temp audio file extracted for analysis is printed in the logs and kept on disk (check `/tmp/tmp*.wav`) for debugging.
+`process_video.py`, `clip.py`, and `transcribe.py` remain as thin wrappers over the same
+step classes for quick ad-hoc use without writing a plan — the plan runner is the
+canonical interface. Their flags, encoding-speed options (hardware encoder, presets), and
+audio-sync notes live in **[docs/standalone-scripts.md](docs/standalone-scripts.md)**.
