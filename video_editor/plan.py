@@ -12,7 +12,7 @@ import yaml
 from . import hooks
 from .state import State
 from .steps import artifacts_for, get_step, produces_for
-from .steps.base import StepContext
+from .steps.base import PauseSignal, StepContext
 
 _REF_RE = re.compile(r"\$\{([^}]+)\}")
 
@@ -294,7 +294,13 @@ class Plan:
                 print(f"[{s.index}/{len(self.steps)}] {s.id} ({s.action})")
                 params = self.resolve(s.with_, s, state)
                 ctx = StepContext(step_id=s.id, workdir=self.workdir, dry_run=dry_run, preview=preview)
-                outputs = get_step(s.action).run(params, ctx)
+                try:
+                    outputs = get_step(s.action).run(params, ctx)
+                except PauseSignal as ps:
+                    self._announce_pause(s, ps.message, selected)
+                    hooks.run_hook(self.hooks, "on_pause",
+                                   {**hook_ctx, "step": s.id, "message": ps.message}, dry_run=dry_run)
+                    return  # clean stop, exit code 0 — remaining steps are not run
 
                 state.record(s.id, outputs)  # no-op on disk during dry-run
                 print(f"  {'[dry-run] ' if dry_run else ''}outputs: {outputs}\n")
@@ -309,6 +315,21 @@ class Plan:
 
         hooks.run_hook(self.hooks, "on_success", {**hook_ctx, "url": last_url}, dry_run=dry_run)
         print("Done.")
+
+    def _announce_pause(self, step: PlanStep, message: str, selected: list[PlanStep]) -> None:
+        remaining = [x for x in selected if x.index > step.index]
+        bar = "=" * 64
+        print(f"\n{bar}")
+        print(f"  PAUSED at step {step.index}: {step.id}")
+        print(f"  {message}")
+        if remaining:
+            nxt = remaining[0]
+            print(f"\n  {len(remaining)} step(s) remain: {', '.join(x.id for x in remaining)}")
+            print(f"  When ready, resume with:")
+            print(f"      video_editor run --plan {self.path} --step {nxt.id}-")
+        else:
+            print("\n  No further steps in this selection.")
+        print(f"{bar}\n")
 
     def _is_fresh(self, step: PlanStep, state: State) -> bool:
         """A step is fresh if done and all its file artifacts still exist."""

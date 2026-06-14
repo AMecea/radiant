@@ -27,9 +27,27 @@ uv run video_editor run      --plan examples/1petru.yaml --preview 10    # 10s p
 - **Fail-fast:** running a step whose upstream artifact doesn't exist yet errors with guidance instead of doing the wrong thing.
 - **`--preview [SECONDS]`** (default 5): caps the long steps (`encode`, `clip`, `transcribe`) to a few seconds so you can sanity-check sync/framing/timestamps fast. Outputs are written `preview_`-prefixed, uploads are skipped, and **state is not saved** — so the preview never blocks or gets mistaken for the real run. Re-run it as many times as you like; a later full run (without `--preview`) still does everything from scratch.
 - **`--dry-run`** prints every command (and hook) without executing; **`--vars k=v`** overrides plan vars for one run.
-- **Hooks:** optional `on_start` / `on_success` / `on_failure` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}` placeholders) — put `caffeinate` / `telegram` piping there.
+- **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
-Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `transcribe` (Whisper timestamps), `upload` (rclone). See `examples/1petru.yaml`.
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `transcribe` (Whisper timestamps), `upload` (rclone), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pause` (manual checkpoint). See `examples/1petru.yaml` and `examples/ffmpeg.yaml`.
+
+### `ffmpeg` — general-purpose transcode / convert
+
+The plain ffmpeg escape hatch (no sync/braw logic): one input, one output, and the common knobs — `vcodec`/`acodec` (or `copy` to stream-copy), `crf`, `preset`, `video_bitrate`/`audio_bitrate`, `scale`, `vf`, `fps`, `start`/`end`/`duration`, `no_audio`, `faststart` (mp4/mov only), `format`, plus an `extra_args` list for raw flags. Handy for downscales, trims, audio extraction, gif previews, and remuxes; honours `--preview` (caps to N seconds). See `examples/ffmpeg.yaml` for transcode / trim / extract-audio / gif samples.
+
+### `pause` — manual checkpoints
+
+Drop a `pause` step where you need to do something by hand (e.g. read the transcript and choose reel start/end). When the run reaches it, it **exits 0**, prints a notice (and fires the `on_pause` hook if set, so you get a telegram ping), and does **not** run the remaining steps:
+
+```yaml
+- id: pick_timestamps
+  action: pause
+  needs: [transcribe]
+  with:
+    message: "Read the transcript and set reel start/end, then resume with --step reel-"
+```
+
+The notice tells you exactly how to resume (`run … --step <next>-`). `pause` is not recorded in state, so it always halts a normal run — you step over it by selecting the steps after it. In `--dry-run` and `--preview` it does **not** halt (those modes are meant to walk/produce the whole chain) — it just prints a note.
 
 The standalone scripts below (`process_video.py`, `clip.py`, `transcribe.py`) remain as thin
 wrappers over the same step logic for ad-hoc use; the plan runner is the canonical interface.

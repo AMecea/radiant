@@ -3,11 +3,13 @@
 from .base import Step, StepContext
 from .clip import ClipStep
 from .encode import EncodeStep
+from .ffmpeg import FfmpegStep
+from .pause import PauseStep
 from .sync import SyncStep
 from .transcribe import TranscribeStep
 from .upload import UploadStep
 
-_STEP_CLASSES = [SyncStep, EncodeStep, ClipStep, TranscribeStep, UploadStep]
+_STEP_CLASSES = [SyncStep, EncodeStep, ClipStep, TranscribeStep, UploadStep, PauseStep, FfmpegStep]
 
 REGISTRY: dict[str, type[Step]] = {cls.action: cls for cls in _STEP_CLASSES}
 

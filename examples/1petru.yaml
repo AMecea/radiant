@@ -22,6 +22,7 @@ hooks:
   on_start:   "caffeinate -dimsu -w $$ &"
   on_success: "echo '{name}: done -> {url}' | telegram send"
   on_failure: "echo '{name}: step {step} failed (exit {code})' | telegram send"
+  on_pause:   "echo '{name}: paused at {step} — {message}' | telegram send"
 
 steps:
   - id: sync                       # outputs: offset, audio_trim
@@ -58,6 +59,12 @@ steps:
     with:
       input: "${steps.master.file}"
       language: ro
+
+  - id: pick_timestamps            # manual checkpoint — exits 0 and notifies
+    action: pause
+    needs: [transcribe]
+    with:
+      message: "Read the transcript and set reel start/end, then resume with --step reel-"
 
   - id: reel                       # outputs: file
     action: clip

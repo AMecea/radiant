@@ -1,0 +1,61 @@
+# Demonstrates the general-purpose `ffmpeg` step — plain transcode/convert from
+# basic parameters (no sync/braw magic). Useful for quick conversions, downscales,
+# trims, audio extraction, and stream-copy remuxes.
+#
+#   video_editor validate --plan examples/ffmpeg.yaml
+#   video_editor list     --plan examples/ffmpeg.yaml
+#   video_editor run      --plan examples/ffmpeg.yaml --step transcode
+#   video_editor run      --plan examples/ffmpeg.yaml --preview 5      # quick sanity check
+#
+# Artifacts land under ./runs/ffmpeg_demo/<step-id>/.
+
+name: ffmpeg_demo
+
+vars:
+  source: "./test_1petru_5_1_5.mp4"
+
+steps:
+  - id: transcode                  # outputs: file — 720p H.264, CRF 23, web-ready
+    action: ffmpeg
+    with:
+      input: "${vars.source}"
+      output: "transcoded_720p.mp4"
+      vcodec: libx264
+      crf: 23
+      preset: medium
+      scale: "-2:720"              # 720p, width auto-kept-even, preserves aspect
+      acodec: aac
+      audio_bitrate: 128k
+      faststart: true
+
+  - id: trim                       # outputs: file — cut 10s starting at 00:00:05
+    action: ffmpeg
+    with:
+      input: "${vars.source}"
+      output: "trim_10s.mp4"
+      start: "00:00:05"
+      duration: 10
+      vcodec: copy                 # stream-copy: no re-encode, instant
+      acodec: copy
+
+  - id: extract_audio              # outputs: file — pull the audio track to mp3
+    action: ffmpeg
+    with:
+      input: "${vars.source}"
+      output: "audio.mp3"
+      acodec: libmp3lame
+      audio_bitrate: 192k
+      faststart: false             # mp4-only flag; off for mp3
+      extra_args: ["-vn"]          # drop video, keep audio only
+
+  - id: gif                        # outputs: file — small looping preview gif
+    action: ffmpeg
+    with:
+      input: "${vars.source}"
+      output: "preview.gif"
+      start: "00:00:02"
+      duration: 3
+      vcodec: gif
+      vf: "fps=12,scale=480:-1:flags=lanczos"
+      no_audio: true
+      faststart: false             # mp4-only flag; off for gif

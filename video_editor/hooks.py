@@ -8,7 +8,7 @@ failing hook is reported but never masks the underlying run result.
 
 import subprocess
 
-_PLACEHOLDERS = ("name", "step", "code", "url")
+_PLACEHOLDERS = ("name", "step", "code", "url", "message")
 
 
 def _format(template: str, ctx: dict) -> str:

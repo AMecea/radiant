@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+class PauseSignal(Exception):
+    """Raised by the ``pause`` step to halt the run cleanly (exit 0) for manual input."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
 @dataclass
 class StepContext:
     """Runtime context handed to a step's ``run``.
