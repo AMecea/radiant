@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -284,7 +285,7 @@ class Plan:
             print(f"PREVIEW mode: long steps capped to {preview}s, outputs prefixed 'preview_', state not saved")
         print(f"Running steps: {', '.join(f'{s.index}:{s.id}' for s in selected)}\n")
 
-        hook_ctx = {"name": self.name, "url": "", "step": "", "code": 0}
+        hook_ctx = {"name": self.name, "url": "", "step": "", "code": 0, "pid": os.getpid()}
         hooks.run_hook(self.hooks, "on_start", hook_ctx, dry_run=dry_run)
 
         last_url = ""

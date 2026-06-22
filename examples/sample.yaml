@@ -19,7 +19,7 @@ vars:
 
 # Optional shell hooks — put your caffeinate / telegram piping here.
 hooks:
-  on_start:   "caffeinate -dimsu -w $$ &"
+  on_start:   "caffeinate -dimsu -w {pid} &"
   on_success: "echo '{name}: done -> {url}' | telegram send"
   on_failure: "echo '{name}: step {step} failed (exit {code})' | telegram send"
   on_pause:   "echo '{name}: paused at {step} — {message}' | telegram send"
