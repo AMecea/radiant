@@ -126,6 +126,13 @@ class Step:
     params: tuple[Param, ...] = ()
     outputs: tuple[Output, ...] = ()
 
+    # ``--preview`` caps long work, so most steps produce truncated results that
+    # must not be saved. A pure-analysis step whose outputs are identical with or
+    # without the cap sets this False, and the runner persists its outputs even
+    # from a preview run — measuring the sync offset takes minutes, and throwing
+    # it away just because the run was a preview is pure waste.
+    preview_affects_output: bool = True
+
     # -- derived spec views (single source of truth = ``outputs``) -----------
 
     @classmethod

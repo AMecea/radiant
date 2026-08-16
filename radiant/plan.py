@@ -5,14 +5,16 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import yaml
 
 from . import hooks
 from .state import State
-from .steps import artifacts_for, get_step, produces_for, required_params_for
+from .steps import artifacts_for, get_step, preview_safe, produces_for, required_params_for
 from .steps.base import PauseSignal, StepContext
 
 _REF_RE = re.compile(r"\$\{([^}]+)\}")
@@ -43,17 +45,14 @@ class Plan:
     # -- loading -------------------------------------------------------------
 
     @classmethod
-    def load(cls, path: Path, var_overrides: dict | None = None, workdir_override: Path | None = None) -> "Plan":
+    def load(cls, path: Path, var_overrides: dict | None = None, workdir_override: Path | None = None,
+             reuse_vars: bool = False) -> "Plan":
         path = Path(path)
         if not path.exists():
             raise PlanError(f"plan file not found: {path}")
         doc = yaml.safe_load(path.read_text()) or {}
 
         name = doc.get("name") or path.stem
-        merged_vars = dict(doc.get("vars") or {})
-        if var_overrides:
-            merged_vars.update(var_overrides)
-
         raw_steps = doc.get("steps") or []
         steps: list[PlanStep] = []
         for i, s in enumerate(raw_steps, start=1):
@@ -70,6 +69,16 @@ class Plan:
             ))
 
         workdir = workdir_override or doc.get("workdir") or (Path("runs") / name)
+
+        # Var precedence: plan file < vars recorded by the last run (only with
+        # --reuse-vars, so a one-off `--vars k=v` need not be retyped on the
+        # single-step rerun) < this invocation's overrides.
+        merged_vars = dict(doc.get("vars") or {})
+        if reuse_vars:
+            merged_vars.update(State(Path(workdir)).vars())
+        if var_overrides:
+            merged_vars.update(var_overrides)
+
         return cls(
             name=name,
             workdir=Path(workdir),
@@ -279,11 +288,18 @@ class Plan:
         ephemeral = dry_run or preview is not None
         if not ephemeral:
             self.workdir.mkdir(parents=True, exist_ok=True)
-        state = State(self.workdir, dry_run=ephemeral)
+        state = State(self.workdir, ephemeral=ephemeral)
+        mode = "dry-run" if dry_run else ("preview" if preview is not None else "run")
+
         print(f"Plan '{self.name}'  workdir={self.workdir}")
         if preview is not None:
-            print(f"PREVIEW mode: long steps capped to {preview}s, outputs prefixed 'preview_', state not saved")
+            print(f"PREVIEW mode: long steps capped to {preview}s, outputs prefixed 'preview_', "
+                  "state not saved (except analysis-only steps, which are unaffected by the cap)")
+        self._warn_var_drift(state)
         print(f"Running steps: {', '.join(f'{s.index}:{s.id}' for s in selected)}\n")
+
+        # Stamp vars/plan/mode up front so what a run used is on disk even if it dies partway.
+        state.begin_run(name=self.name, plan_path=self.path, vars=self.vars, mode=mode)
 
         hook_ctx = {"name": self.name, "url": "", "step": "", "code": 0, "pid": os.getpid()}
         hooks.run_hook(self.hooks, "on_start", hook_ctx, dry_run=dry_run)
@@ -295,12 +311,15 @@ class Plan:
                 current = s.id
                 if not force and self._is_fresh(s, state):
                     print(f"[{s.index}/{len(self.steps)}] {s.id} ({s.action}) — already done, skipping (use --force to rerun)")
+                    self._warn_param_drift(s, state)
                     last_url = state.get_output(s.id, "url") or last_url
                     continue
 
                 print(f"[{s.index}/{len(self.steps)}] {s.id} ({s.action})")
                 params = self.resolve(s.with_, s, state)
                 ctx = StepContext(step_id=s.id, workdir=self.workdir, dry_run=dry_run, preview=preview)
+                started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+                t0 = time.monotonic()
                 try:
                     outputs = get_step(s.action).run(params, ctx)
                 except PauseSignal as ps:
@@ -309,8 +328,18 @@ class Plan:
                                    {**hook_ctx, "step": s.id, "message": ps.message}, dry_run=dry_run)
                     return  # clean stop, exit code 0 — remaining steps are not run
 
-                state.record(s.id, outputs)  # no-op on disk during dry-run
-                print(f"  {'[dry-run] ' if dry_run else ''}outputs: {outputs}\n")
+                # A preview never writes state — except for analysis-only steps
+                # (`preview_affects_output = False`), whose result is the real one.
+                persist = preview is not None and not dry_run and preview_safe(s.action)
+                state.record(
+                    s.id, outputs,
+                    action=s.action, params=params, started_at=started_at,
+                    duration_s=time.monotonic() - t0, mode=mode, persist=persist,
+                )
+                print(f"  {'[dry-run] ' if dry_run else ''}outputs: {outputs}")
+                if persist:
+                    print("  (recorded to state.json — unaffected by --preview, so it won't be recomputed)")
+                print()
                 last_url = (outputs or {}).get("url") or last_url
         except PlanError as e:
             hooks.run_hook(self.hooks, "on_failure", {**hook_ctx, "step": current, "code": 1}, dry_run=dry_run)
@@ -337,6 +366,34 @@ class Plan:
         else:
             print("\n  No further steps in this selection.")
         print(f"{bar}\n")
+
+    def _warn_var_drift(self, state: State) -> None:
+        """Recorded state was built from the *previous* run's vars. If they changed,
+        say so — that's usually why a 'done' step's outputs look wrong."""
+        previous = state.vars()
+        if not previous:
+            return
+        changed = [k for k, v in previous.items() if k in self.vars and self.vars[k] != v]
+        if not changed:
+            return
+        print("  ! vars changed since the last recorded run:")
+        for k in changed:
+            print(f"      {k}: {previous[k]!r} -> {self.vars[k]!r}")
+        print("    Steps already marked done still hold outputs built from the old values"
+              " (--force to rebuild).")
+
+    def _warn_param_drift(self, step: PlanStep, state: State) -> None:
+        """Flag a skipped step whose resolved inputs no longer match what it ran with."""
+        recorded = state.params(step.id)
+        if not recorded:
+            return  # ran before params were recorded (schema v1) — nothing to compare
+        try:
+            current = self.resolve(step.with_, step, state)
+        except PlanError:
+            return
+        drifted = sorted(k for k in set(recorded) | set(current) if recorded.get(k) != current.get(k))
+        if drifted:
+            print(f"      ! inputs changed since it ran ({', '.join(drifted)}) — --force to rerun")
 
     def _is_fresh(self, step: PlanStep, state: State) -> bool:
         """A step is fresh if done and all its file artifacts still exist."""

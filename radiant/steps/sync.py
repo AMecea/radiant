@@ -56,6 +56,7 @@ def _find_offset(video_audio_path: Path, ref_audio_path: Path, duration: int) ->
 class SyncStep(Step):
     action = "sync"
     summary = "Detect the time offset between camera audio and the speaker-mic."
+    preview_affects_output = False  # analysis only — the offset is the same in preview
     params = (
         Param("video", "Camera video (or BRAW) whose audio is the reference track.",
               type="path", required=True),

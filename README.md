@@ -29,6 +29,11 @@ uv run radiant run      --plan examples/sample.yaml --step master     # heavy en
 uv run radiant run      --plan examples/sample.yaml --step transcribe # find reel timestamps
 uv run radiant run      --plan examples/sample.yaml --step reel-upload_reel
 uv run radiant list     --plan examples/sample.yaml      # per-step status + outputs
+uv run radiant state    --plan examples/sample.yaml      # vars used + per-step inputs/outputs/timing
+uv run radiant state    --plan examples/sample.yaml --json
+
+uv run radiant set      --plan examples/sample.yaml sync.offset=722.307   # pin a value by hand
+uv run radiant forget   --plan examples/sample.yaml reel                  # drop a step's record
 
 uv run radiant help                  # list every action and its one-liner
 uv run radiant help ffmpeg           # parameters + outputs for one action
@@ -38,11 +43,13 @@ uv run radiant run      --plan examples/sample.yaml --preview 10    # 10s previe
 ```
 
 - **Step selector** (`--step`): `N`, `N-M`, `N-`, `-M`, comma lists, step ids, and id ranges (`sync-reel`). Default = all.
-- **Artifacts & state:** outputs land under `runs/<plan-name>/<step-id>/`; `state.json` records each step's outputs. Referenced as `${steps.<id>.<output>}` and `${vars.<key>}` in the plan.
-- **Resumable / idempotent:** a finished step is skipped on re-run unless its artifact was deleted (then it rebuilds) or you pass `--force`.
+- **Artifacts & state:** outputs land under `runs/<plan-name>/<step-id>/`; `state.json` is the run record — the `vars` the run used, and per step the *resolved* `with:` parameters it ran with, the outputs it produced, and its timing. Referenced as `${steps.<id>.<output>}` and `${vars.<key>}` in the plan.
+- **Resumable / idempotent:** a finished step is skipped on re-run unless its artifact was deleted (then it rebuilds) or you pass `--force`. Rerunning one step alone (`--step reel`) pulls every upstream value — the sync offset, the master path — out of `state.json` instead of recomputing it.
+- **Drift warnings:** because the inputs are recorded too, a re-run tells you when a `var` changed since the last run, and when a step marked done was built from inputs that have since changed (`--force` to rebuild).
 - **Fail-fast:** running a step whose upstream artifact doesn't exist yet errors with guidance instead of doing the wrong thing.
-- **`--preview [SECONDS]`** (default 5): caps the long steps (`encode`, `clip`, `transcribe`) to a few seconds so you can sanity-check sync/framing/timestamps fast. Outputs are written `preview_`-prefixed, uploads are skipped, and **state is not saved** — so the preview never blocks or gets mistaken for the real run. Re-run it as many times as you like; a later full run (without `--preview`) still does everything from scratch.
-- **`--dry-run`** prints every command (and hook) without executing; **`--vars k=v`** overrides plan vars for one run.
+- **`--preview [SECONDS]`** (default 5): caps the long steps (`encode`, `clip`, `transcribe`) to a few seconds so you can sanity-check sync/framing/timestamps fast. Outputs are written `preview_`-prefixed, uploads are skipped, and **state is not saved** — so the preview never blocks or gets mistaken for the real run. The one exception is an analysis-only step whose result the cap cannot change (`sync`, declared with `preview_affects_output = False`): its outputs *are* recorded, so a 20-minute cross-correlation isn't thrown away just because you ran a preview.
+- **`--dry-run`** prints every command (and hook) without executing (its results are never recorded); **`--vars k=v`** overrides plan vars for one run, and **`--reuse-vars`** starts from the vars the last run recorded so a one-off override needn't be retyped on the single-step rerun.
+- **`state` / `set` / `forget`:** `state` prints what the workdir remembers (add `--json` for the raw record); `set <step>.<output>=<value>` pins a value you already know so a later step can consume it without running the producer; `forget <step>` drops a record so it runs again.
 - **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
 Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `transcribe` (Whisper timestamps), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `radiant help` for the full list, or `radiant help <action>` for one action's parameters. See `examples/sample.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.

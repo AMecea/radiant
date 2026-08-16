@@ -46,7 +46,13 @@ def required_params_for(action: str) -> tuple[str, ...]:
     return REGISTRY[action].required_params() if action in REGISTRY else ()
 
 
+def preview_safe(action: str) -> bool:
+    """True when ``--preview`` cannot change the action's outputs, so they are
+    worth recording even from a preview run."""
+    return not REGISTRY[action].preview_affects_output if action in REGISTRY else False
+
+
 __all__ = [
     "Step", "StepContext", "Param", "Output", "REGISTRY", "get_step",
-    "produces_for", "artifacts_for", "required_params_for",
+    "produces_for", "artifacts_for", "required_params_for", "preview_safe",
 ]

@@ -41,7 +41,9 @@ map it to an action via `help` rather than inventing flags.
    uv run radiant validate --plan PATH
    ```
 4. **Preview** the chain fast before committing to a long encode (caps long steps to a
-   few seconds, prefixes outputs `preview_`, skips uploads, saves no state):
+   few seconds, prefixes outputs `preview_`, skips uploads, saves no state — except
+   analysis-only steps like `sync`, whose result the cap can't change and which are
+   therefore recorded so they aren't recomputed later):
    ```bash
    uv run radiant run --plan PATH --preview        # 5s
    uv run radiant run --plan PATH --preview 10
@@ -54,11 +56,25 @@ map it to an action via `help` rather than inventing flags.
    ```
 6. **Inspect state** any time:
    ```bash
-   uv run radiant list --plan PATH      # per-step status + outputs
+   uv run radiant list  --plan PATH      # compact: per-step status + outputs
+   uv run radiant state --plan PATH      # full record: vars used, per-step inputs/outputs/timing
+   uv run radiant state --plan PATH --json
    ```
 
 Use `--dry-run` on `run` to print every command (and hook) without executing — good
 for showing the user what will happen.
+
+**Reruns keep earlier results.** `state.json` holds the vars of the last run plus each
+step's resolved inputs and outputs, so `--step reel` on its own resolves
+`${steps.sync.offset}` and `${steps.master.file}` from the record. When a value is
+already known but was never recorded (measured by hand, read off an old log), pin it
+instead of recomputing the producer:
+
+```bash
+uv run radiant set    --plan PATH sync.offset=722.307 sync.audio_trim=0
+uv run radiant forget --plan PATH master        # drop a record so it runs again
+uv run radiant run    --plan PATH --step master --reuse-vars   # reuse last run's vars
+```
 
 ## Plan structure
 
@@ -111,9 +127,12 @@ steps:
   ranges (`sync-reel`). Default = all.
 - **Resumable / idempotent:** a finished step is skipped on re-run unless its file
   artifact was deleted (then it rebuilds) or you pass `--force`. Override vars for one
-  run with `--vars k=v`.
-- **Artifacts:** land under `runs/<name>/<step-id>/`; `state.json` records each step's
-  outputs.
+  run with `--vars k=v`, or reuse the last run's with `--reuse-vars`.
+- **Artifacts:** land under `runs/<name>/<step-id>/`; `state.json` records the vars the
+  run used and, per step, the resolved inputs, the outputs, and the timing.
+- **Drift warnings:** a run reports vars that changed since the last recorded run, and
+  skipped steps whose inputs no longer match what they were built from — that message
+  means "the recorded output is stale, `--force` it", not a failure.
 
 ## Tips & gotchas
 
