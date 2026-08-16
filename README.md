@@ -86,6 +86,21 @@ Drop a `pause` step where you need to do something by hand (e.g. read the transc
 
 The notice tells you exactly how to resume (`run … --step <next>-`). `pause` is not recorded in state, so it always halts a normal run — you step over it by selecting the steps after it. In `--dry-run` and `--preview` it does **not** halt (those modes are meant to walk/produce the whole chain) — it just prints a note.
 
+## Tests
+
+```bash
+uv run pytest                       # whole suite, ~2s
+uv run pytest tests/test_plan_run.py -k preview
+```
+
+`tests/` covers the parts that decide what happens to your footage: plan loading and
+validation, `${...}` resolution, step selectors, the run loop (resume, `--force`,
+single-step reruns, `--preview`/`--dry-run` state handling, drift warnings, `pause`,
+hooks), the state record (including schema-v1 files), every CLI command, and the ffmpeg
+argv the steps build. Most of it runs real `shell` steps rather than mocks — a plan of
+`echo`/`cat` commands exercises the same code path a real encode does. No test needs
+rclone, YouTube or the network; the `sync` offset test is skipped when `ffmpeg` is absent.
+
 ## Claude Code skill
 
 A [Claude Code](https://claude.com/claude-code) skill lives at `.claude/skills/video-pipeline/` — it teaches Claude how to author, validate, preview, and run plans with this tool. Working **inside this repo** it's picked up automatically (no install). To use it from anywhere, install it as a personal skill:
