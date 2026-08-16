@@ -180,6 +180,19 @@ class Step:
         return params[key]
 
     @staticmethod
+    def to_seconds(value) -> float:
+        """Accept seconds (int/float/str) or a clock string HH:MM:SS(.ms)/MM:SS."""
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if ":" in s:
+            secs = 0.0
+            for part in s.split(":"):
+                secs = secs * 60 + float(part)
+            return secs
+        return float(s)
+
+    @staticmethod
     def as_bool(value, default: bool = False) -> bool:
         if value is None:
             return default

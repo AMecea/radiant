@@ -2,9 +2,11 @@
 name: video-pipeline
 description: >-
   Author, validate, preview, and run radiant pipeline plans in this repo —
-  ffmpeg-based video editing (transcode, trim/cut, clip/crop) plus audio sync,
+  ffmpeg-based video editing (transcode, trim/cut, clip/crop, and assembling
+  several clips into one timeline with transitions) plus audio sync,
   Whisper transcription, and uploads (rclone remotes, YouTube). Use whenever the
-  user wants to edit / process / transcode / trim / cut / clip / crop / sync /
+  user wants to edit / process / transcode / trim / cut / clip / crop / merge /
+  join / concatenate with transitions / sync /
   transcribe / upload a video with this project's radiant tool, or to
   create, validate, run, or preview a YAML plan or one of its steps.
 ---
@@ -34,7 +36,8 @@ map it to an action via `help` rather than inventing flags.
 1. **Understand the request** and pick actions (`help` to confirm availability/params).
 2. **Author or edit the plan YAML.** Crib structure from `examples/` (`sample.yaml` is
    the full sync→encode→upload→transcribe→clip→upload flow; `ffmpeg.yaml`, `trim.yaml`,
-   `pipe.yaml`, `youtube.yaml`, `shell.yaml`, `stream_upload.yaml` are focused samples).
+   `timeline.yaml`, `pipe.yaml`, `youtube.yaml`, `shell.yaml`, `stream_upload.yaml` are
+   focused samples).
 3. **Validate** — catches unknown actions, bad `${...}` refs, cycles, and missing
    required params *before* anything runs:
    ```bash
@@ -141,6 +144,13 @@ steps:
   throwaway; use separate steps when you want per-stage resume. `trim`/`ffmpeg` are the
   same implementation, so `include`/`exclude` cuts also work directly on an `ffmpeg`
   step.
+- **`concat`** is the multi-source editor: an ordered `clips:` list (each with its own
+  `start`/`end`|`duration`), joined by `transition: cut` or an ffmpeg `xfade` name, with
+  a matching audio `acrossfade`. A clip's `transition` describes how it joins the clip
+  *before* it, so the first clip's is ignored; a transition must be shorter than both
+  clips it joins. Mismatched sources are normalised onto one canvas (`width`/`height`/
+  `fps`/`fit`), and silent sources get generated silence. Trim inline for a single
+  in/out point; use a separate `trim` step when a clip needs several ranges dropped.
 - **`pause`** is a manual checkpoint: a normal run exits 0 at it and prints how to
   resume (`--step <next>-`); it does not halt under `--dry-run`/`--preview`.
 - **BRAW** (`braw_decode`, BRAW-aware `encode`) needs the `braw-decode` binary at

@@ -44,6 +44,43 @@ def get_duration(path: Path) -> float:
     return float(json.loads(result.stdout)["format"]["duration"])
 
 
+def probe(path: Path) -> dict:
+    """Geometry, duration and audio presence for a media file, in one ffprobe call.
+
+    Returns ``{width, height, fps, duration, has_audio}``. Missing pieces come back
+    as ``0`` / ``0.0`` / ``False`` rather than raising, so a caller can fall back to
+    its own defaults; a *broken or absent* file still raises (ffprobe exits non-zero).
+    """
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_format", "-show_streams", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    doc = json.loads(result.stdout or "{}")
+    streams = doc.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    fps = 0.0
+    if video and video.get("r_frame_rate"):
+        num, _, den = video["r_frame_rate"].partition("/")
+        try:
+            fps = float(num) / float(den or 1)
+        except (ValueError, ZeroDivisionError):
+            fps = 0.0
+
+    duration = doc.get("format", {}).get("duration") or (video or {}).get("duration") or 0.0
+    return {
+        "width": int((video or {}).get("width") or 0),
+        "height": int((video or {}).get("height") or 0),
+        "fps": fps,
+        "duration": float(duration),
+        "has_audio": audio is not None,
+    }
+
+
 def _braw_format_args_from_ffprobe(braw_path: Path) -> list[str]:
     """Build braw-decode pipe format args using ffprobe for resolution/fps."""
     result = subprocess.run(

@@ -3,6 +3,7 @@
 from .base import Output, Param, Step, StepContext
 from .braw_decode import BrawDecodeStep
 from .clip import ClipStep
+from .concat import ConcatStep
 from .encode import EncodeStep
 from .ffmpeg import FfmpegStep
 from .pause import PauseStep
@@ -18,7 +19,7 @@ from .youtube import YouTubeUploadStep
 _STEP_CLASSES = [
     SyncStep, EncodeStep, ClipStep, TranscribeStep, UploadStep,
     PauseStep, FfmpegStep, BrawDecodeStep, PipeStep, ShellStep, UploadStreamStep,
-    TrimStep, YouTubeUploadStep,
+    TrimStep, YouTubeUploadStep, ConcatStep,
 ]
 
 REGISTRY: dict[str, type[Step]] = {cls.action: cls for cls in _STEP_CLASSES}

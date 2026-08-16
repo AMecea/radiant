@@ -1,6 +1,7 @@
 # Radiant
 
-A YAML-driven **ffmpeg video-editing pipeline** — transcode, cut/trim, crop/clip — with
+A YAML-driven **ffmpeg video-editing pipeline** — transcode, cut/trim, crop/clip, and
+assemble several sources into one timeline with transitions — with
 a few extra goodies built around it: automatic camera↔mic audio sync, Whisper
 transcription, and uploads (rclone remotes and YouTube). You declare an ordered plan of
 steps once and the runner executes it, resumably.
@@ -47,12 +48,12 @@ uv run radiant run      --plan examples/sample.yaml --preview 10    # 10s previe
 - **Resumable / idempotent:** a finished step is skipped on re-run unless its artifact was deleted (then it rebuilds) or you pass `--force`. Rerunning one step alone (`--step reel`) pulls every upstream value — the sync offset, the master path — out of `state.json` instead of recomputing it.
 - **Drift warnings:** because the inputs are recorded too, a re-run tells you when a `var` changed since the last run, and when a step marked done was built from inputs that have since changed (`--force` to rebuild).
 - **Fail-fast:** running a step whose upstream artifact doesn't exist yet errors with guidance instead of doing the wrong thing.
-- **`--preview [SECONDS]`** (default 5): caps the long steps (`encode`, `clip`, `transcribe`) to a few seconds so you can sanity-check sync/framing/timestamps fast. Outputs are written `preview_`-prefixed, uploads are skipped, and **state is not saved** — so the preview never blocks or gets mistaken for the real run. The one exception is an analysis-only step whose result the cap cannot change (`sync`, declared with `preview_affects_output = False`): its outputs *are* recorded, so a 20-minute cross-correlation isn't thrown away just because you ran a preview.
+- **`--preview [SECONDS]`** (default 5): caps the long steps (`encode`, `clip`, `transcribe`, and each clip of a `concat` timeline) to a few seconds so you can sanity-check sync/framing/timestamps fast. Outputs are written `preview_`-prefixed, uploads are skipped, and **state is not saved** — so the preview never blocks or gets mistaken for the real run. The one exception is an analysis-only step whose result the cap cannot change (`sync`, declared with `preview_affects_output = False`): its outputs *are* recorded, so a 20-minute cross-correlation isn't thrown away just because you ran a preview.
 - **`--dry-run`** prints every command (and hook) without executing (its results are never recorded); **`--vars k=v`** overrides plan vars for one run, and **`--reuse-vars`** starts from the vars the last run recorded so a one-off override needn't be retyped on the single-step rerun.
 - **`state` / `set` / `forget`:** `state` prints what the workdir remembers (add `--json` for the raw record); `set <step>.<output>=<value>` pins a value you already know so a later step can consume it without running the producer; `forget <step>` drops a record so it runs again.
 - **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
-Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `transcribe` (Whisper timestamps), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `radiant help` for the full list, or `radiant help <action>` for one action's parameters. See `examples/sample.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `concat` (assemble several clips into one timeline, with transitions), `transcribe` (Whisper timestamps), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `radiant help` for the full list, or `radiant help <action>` for one action's parameters. See `examples/sample.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/timeline.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
 
 Each action declares its parameters and outputs uniformly (the `params` / `outputs` specs on its step class), so `radiant help <action>` documents every parameter — type, whether it's required, its default, and what it does — straight from the code. Required parameters are checked at `validate`/`run` time, and `${steps.<id>.<output>}` references are checked against the declared outputs.
 
@@ -66,9 +67,37 @@ Give `trim` **either** an `include` list (keep only those ranges) **or** an `exc
 
 `trim` is just the `ffmpeg` action with a *required* `include`/`exclude` cut — both actions share one implementation, so you can also add `include`/`exclude` directly to any `ffmpeg` step (e.g. to cut while you encode/scale in a single pass).
 
+### `concat` — assemble clips into one timeline (transitions, fades)
+
+The linear-editing primitive: an ordered `clips:` list, each entry a source with its own in/out point, joined by a hard **cut** or a **transition**.
+
+```yaml
+- id: film
+  action: concat
+  with:
+    output: film.mp4
+    transition: fade                # default join between clips…
+    transition_duration: 1.0
+    width: 1920                     # …and the canvas everything is fitted to
+    height: 1080
+    fps: 30
+    clips:
+      - { file: "${vars.intro}", end: 6, fade_in: 1 }          # fade up from black
+      - { file: "${steps.talk.file}", transition: dissolve, start: 120, duration: 240 }
+      - { file: "${vars.broll}", transition: cut, duration: 12, volume: 0.25 }
+      - { file: "${vars.outro}", transition: wipeleft, transition_duration: 0.75, fade_out: 2 }
+```
+
+- **Per clip:** `file`, `start` + (`end` | `duration`) for the in/out point, `transition` + `transition_duration` (how it joins the clip *before* it — so reordering clips carries their transitions along), `fade_in`/`fade_out` (video and audio), `volume`. Times are seconds or clock strings, as everywhere else.
+- **Transitions:** `cut`, or any ffmpeg `xfade` name — `fade`, `fadeblack`, `dissolve`, `wipeleft/right/up/down`, `slide*`, `smooth*`, `circleopen/close`, `pixelize`, `zoomin`, `cover*`/`reveal*`, … A transition *overlaps* the two clips, so the audio gets a matching `acrossfade` and the timeline gets shorter by exactly that much (the reported `duration` output accounts for it). It is an error for a transition to outlast either clip it joins.
+- **Mixed sources just work:** every clip is normalised onto a common canvas first — scale (`fit: contain` letterbox / `cover` crop-to-fill / `stretch`), pad, `fps`, SAR, pixel format, timebase — because `xfade` refuses to mix geometries. A source with no audio track gets generated silence, so the audio timeline stays aligned; if *nothing* has audio, the result is video-only.
+- **One pass:** the whole timeline is a single `-filter_complex` ffmpeg invocation with input-level seeks — no temp files, no per-segment muxing, no generation loss between cuts. Outputs `file` and `duration`.
+- **`--preview N`** caps *each clip* to N seconds (shrinking transitions that no longer fit) so you can watch every join in a few seconds rather than seeing only the head of clip 1.
+- It can also be the **source stage of a `pipe`** (it reads its own clips, so it's always first) — assemble and upload without the intermediate file. See `examples/timeline.yaml`.
+
 ### `pipe` — compose stages via OS pipes
 
-`pipe` chains several actions into a single streaming command (`stage1 | stage2 | …`), the same shape `encode` uses internally (`braw-decode | ffmpeg`) but assembled declaratively from reusable stages. The first stage is a **source** (writes stdout), the last is the **sink** (writes the `output` file); geometry/format metadata flows from one stage to the next (e.g. `braw_decode` tells `ffmpeg` the rawvideo size + fps). A stage opts in by implementing `Step.command`; today `braw_decode` (source), `ffmpeg`/`trim` (filter or sink), `shell` (any role), and `upload_stream` (streaming sink) do.
+`pipe` chains several actions into a single streaming command (`stage1 | stage2 | …`), the same shape `encode` uses internally (`braw-decode | ffmpeg`) but assembled declaratively from reusable stages. The first stage is a **source** (writes stdout), the last is the **sink** (writes the `output` file); geometry/format metadata flows from one stage to the next (e.g. `braw_decode` tells `ffmpeg` the rawvideo size + fps). A stage opts in by implementing `Step.command`; today `braw_decode` (source), `concat` (source — it reads its own clips), `ffmpeg`/`trim` (filter or sink), `shell` (any role), and `upload_stream` (streaming sink) do.
 
 A pipe runs as **one unit** — no intermediate file lands on disk, so there's nothing to resume mid-pipe; if the output is deleted the whole pipe re-runs. Use a pipe when you want streaming with no large throwaway intermediate; use separate plan steps when you want per-stage resume. `examples/pipe.yaml` reproduces the `master` encode as `braw_decode | ffmpeg` (the built-in `encode` action is unchanged).
 

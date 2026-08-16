@@ -1,0 +1,116 @@
+# Demonstrates `concat` — the linear-editing primitive: load several sources,
+# set an in/out point on each, and join them with hard cuts or transitions
+# (ffmpeg `xfade` on the video + a matching `acrossfade` on the audio).
+#
+#   radiant validate --plan examples/timeline.yaml
+#   radiant run      --plan examples/timeline.yaml --preview 3   # every join, in seconds
+#   radiant run      --plan examples/timeline.yaml --step film
+#
+# The whole timeline is ONE ffmpeg command: clips are normalised onto a common
+# canvas (scale/pad/fps/pixel format), joined, then encoded once — no temp files
+# and no generation loss between cuts. `--preview N` caps every clip to N seconds
+# (and shrinks transitions to fit), so you can watch all the joins in a few seconds.
+#
+# Artifacts land under ./runs/timeline_demo/<step-id>/.
+
+name: timeline_demo
+
+vars:
+  intro:  "./resources/intro.mp4"       # title card / bumper
+  talk:   "./test_1petru_5_1_5.mp4"     # the main body
+  broll:  "./resources/broll.mp4"       # cutaway footage (may be silent)
+  outro:  "./resources/outro.mp4"       # end card
+  bucket: "gs:my-bucket/edits/"
+
+steps:
+  # 1. Prep a source before it reaches the timeline. `concat` can trim inline
+  #    (start/end per clip), so this step is only needed for the cuts a single
+  #    in/out point can't express — here, dropping a dead patch mid-talk.
+  - id: talk_tidy                        # outputs: file
+    action: trim
+    with:
+      input:  "${vars.talk}"
+      output: "talk_tidy.mp4"
+      exclude:
+        - { start: 0, end: 8 }           # slate + throat-clearing
+        - { start: "04:10", end: "04:35" }
+
+  # 2. The edit itself: four sources → one film.
+  #    Each clip's `transition` describes how it joins the clip BEFORE it, so
+  #    reordering clips moves their transitions with them.
+  - id: film                             # outputs: file, duration
+    action: concat
+    needs: [talk_tidy]
+    with:
+      output: "film.mp4"
+      transition: fade                   # default join for every clip…
+      transition_duration: 1.0
+      width: 1920                        # …and the canvas everything is fitted to
+      height: 1080
+      fps: 30
+      fit: contain                       # letterbox mismatched aspect ratios
+      clips:
+        - file: "${vars.intro}"
+          fade_in: 1.0                   # fade up from black (video + audio)
+          end: 6                         # only the first 6s of the bumper
+
+        - file: "${steps.talk_tidy.file}"
+          transition: dissolve           # dissolve out of the intro
+          transition_duration: 1.5
+          start: 5                       # in-point inside the trimmed talk
+          duration: 240                  # …and run for 4 minutes
+
+        - file: "${vars.broll}"
+          transition: cut                # hard cut into the cutaway
+          duration: 12
+          volume: 0.25                   # duck it under the voice (silent b-roll
+                                         # gets generated silence automatically)
+
+        - file: "${vars.outro}"
+          transition: wipeleft           # wipe into the end card
+          transition_duration: 0.75
+          fade_out: 2.0                  # …and fade to black on the way out
+
+      crf: 20
+      preset: medium
+
+  # 3. A vertical cut-down of the same edit — same clips, different canvas.
+  #    `fit: cover` fills 1080x1920 and crops instead of letterboxing.
+  - id: vertical                         # outputs: file, duration
+    action: concat
+    needs: [talk_tidy]
+    with:
+      output: "film_9x16.mp4"
+      width: 1080
+      height: 1920
+      fps: 30
+      fit: cover
+      transition: fadeblack
+      transition_duration: 0.5
+      clips:
+        - { file: "${steps.talk_tidy.file}", start: 30, duration: 20, fade_in: 0.5 }
+        - { file: "${vars.broll}", duration: 8 }
+        - { file: "${vars.outro}", duration: 4, fade_out: 0.5 }
+      crf: 22
+      preset: medium
+
+  # 4. Assemble and upload in one streamed command — `concat` can be a pipe
+  #    SOURCE (it reads its own clips, so it is always the first stage).
+  - id: publish                          # outputs: url
+    action: pipe
+    needs: [film]
+    with:
+      stages:
+        - action: concat
+          with:
+            clips:
+              - { file: "${steps.film.file}", duration: 30 }
+              - { file: "${vars.outro}", transition: dissolve, duration: 5 }
+            transition_duration: 1.0
+            crf: 24
+            preset: fast
+        - action: upload_stream
+          with:
+            remote:   "${vars.bucket}"
+            filename: "teaser.mp4"
+            public:   true

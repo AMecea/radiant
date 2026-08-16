@@ -78,18 +78,9 @@ class FfmpegStep(Step):
 
     # -- include/exclude cut -------------------------------------------------
 
-    @staticmethod
-    def _to_seconds(value) -> float:
-        """Accept seconds (int/float/str) or a clock string HH:MM:SS(.ms)/MM:SS."""
-        if isinstance(value, (int, float)):
-            return float(value)
-        s = str(value).strip()
-        if ":" in s:
-            secs = 0.0
-            for part in s.split(":"):
-                secs = secs * 60 + float(part)
-            return secs
-        return float(s)
+    # Time parsing lives on ``Step`` (shared with `concat`); kept here as the name
+    # the cut helpers below read.
+    _to_seconds = staticmethod(Step.to_seconds)
 
     def _cut_bounds(self, cut) -> tuple[float, float]:
         if isinstance(cut, dict):
