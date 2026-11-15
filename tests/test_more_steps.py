@@ -186,3 +186,72 @@ class TestSyncOffset:
         ctx = StepContext(step_id="sync", workdir=tmp_path)
         with pytest.raises(SystemExit, match="video file not found"):
             SyncStep().run({"video": str(tmp_path / "no.mp4"), "audio": str(tmp_path / "no.wav")}, ctx)
+
+
+class TestTranscribe:
+    """faster-whisper is stubbed with a fake model so no weights are downloaded."""
+
+    @pytest.fixture
+    def fake_whisper(self, monkeypatch):
+        import sys
+        import types
+        from types import SimpleNamespace as NS
+
+        calls = {}
+
+        class FakeModel:
+            def __init__(self, *a, **kw):
+                pass
+
+            def transcribe(self, path, language=None, word_timestamps=False):
+                calls["word_timestamps"] = word_timestamps
+                words = [NS(start=0.0, end=0.4, word=" Bună", probability=0.98),
+                         NS(start=0.45, end=1.0, word=" ziua", probability=0.91)]
+                seg = NS(start=0.0, end=1.0, text=" Bună ziua ",
+                         words=words if word_timestamps else None)
+                return iter([seg]), NS(language="ro", language_probability=0.99, duration=1.0)
+
+        monkeypatch.setitem(sys.modules, "faster_whisper",
+                            types.SimpleNamespace(WhisperModel=FakeModel))
+        return calls
+
+    def test_segment_level_only_by_default(self, ctx, tmp_path, fake_whisper):
+        from radiant.steps.transcribe import TranscribeStep
+        src = tmp_path / "talk.mp4"
+        src.write_bytes(b"")
+
+        out = TranscribeStep().run({"input": str(src)}, ctx)
+
+        assert fake_whisper["word_timestamps"] is False
+        assert out["words"] == ""
+        from pathlib import Path
+        assert Path(out["transcript"]).read_text() == "0.000000\t1.000000\tBună ziua\n"
+
+    def test_word_timestamps_writes_both_files(self, ctx, tmp_path, fake_whisper):
+        import json
+        from pathlib import Path
+
+        from radiant.steps.transcribe import TranscribeStep
+        src = tmp_path / "talk.mp4"
+        src.write_bytes(b"")
+
+        out = TranscribeStep().run({"input": str(src), "word_timestamps": True}, ctx)
+
+        assert fake_whisper["word_timestamps"] is True
+        assert Path(out["transcript"]).read_text() == "0.000000\t1.000000\tBună ziua\n"
+        assert Path(out["words"]).name == "talk.words.json"
+        data = json.loads(Path(out["words"]).read_text(encoding="utf-8"))
+        assert data["language"] == "ro"
+        [seg] = data["segments"]
+        assert seg["text"] == "Bună ziua"
+        assert seg["words"] == [
+            {"start": 0.0, "end": 0.4, "word": "Bună", "probability": 0.98},
+            {"start": 0.45, "end": 1.0, "word": "ziua", "probability": 0.91},
+        ]
+
+    def test_dry_run_reports_both_paths(self, dry_ctx, tmp_path):
+        from radiant.steps.transcribe import TranscribeStep
+        out = TranscribeStep().run({"input": str(tmp_path / "talk.mp4"),
+                                    "word_timestamps": "true"}, dry_ctx)
+        assert out["transcript"].endswith("talk.txt")
+        assert out["words"].endswith("talk.words.json")

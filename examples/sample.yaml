@@ -53,7 +53,7 @@ steps:
       remote: "${vars.video_dir}"
       public: true
 
-  - id: transcribe                 # outputs: transcript (start<TAB>end<TAB>text)
+  - id: transcribe                 # outputs: transcript (start<TAB>end<TAB>text), words (.words.json if word_timestamps: true)
     action: transcribe
     needs: [master]
     with:
