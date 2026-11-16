@@ -1,5 +1,6 @@
 import type { TimeStyle } from "../core/time";
 import type { ClipFormat } from "../core/formats";
+import type { OpState } from "../core/ops";
 
 export interface Settings {
   /** gaps at least this long (s) are shown as pauses */
@@ -13,6 +14,15 @@ export interface Settings {
   skipPauses: boolean;
   copyFormat: ClipFormat;
   rate: number;
+  /** a deleted pause is shortened to this many seconds */
+  pauseKeep: number;
+  /** while playing, jump over what the text edits removed */
+  previewEdits: boolean;
+  /** short audio fades at every join of an export */
+  smoothJoins: boolean;
+  /** processing applied on export (crop, scale, audio filters) */
+  ops: OpState[];
+  exportMode: string;
 }
 
 const DEFAULTS: Settings = {
@@ -23,6 +33,11 @@ const DEFAULTS: Settings = {
   skipPauses: false,
   copyFormat: "ranges",
   rate: 1,
+  pauseKeep: 0.3,
+  previewEdits: true,
+  smoothJoins: true,
+  ops: [],
+  exportMode: "",
 };
 
 const KEY = "textcut.settings.v1";

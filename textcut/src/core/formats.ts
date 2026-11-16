@@ -1,5 +1,6 @@
 import { fmtTime, type TimeStyle } from "./time";
 import type { TimeRange } from "./ranges";
+import { buildJob, jobToShell } from "./ffjob";
 
 export interface Clip extends TimeRange {
   text?: string;
@@ -23,6 +24,8 @@ export interface FormatOptions {
   output?: string;
   /** false for audio-only sources (affects the ffmpeg command) */
   hasVideo?: boolean;
+  /** audio fade at each join (s), ffmpeg command only */
+  fade?: number;
 }
 
 /** Text renderings of a clip list, for the clipboard. */
@@ -64,19 +67,10 @@ export function formatClips(clips: readonly Clip[], kind: ClipFormat, opts: Form
         ].join("\n");
       }).join("\n\n");
 
-    case "ffmpeg": {
-      const codecs = hasVideo ? "-c:v libx264 -crf 20 -c:a aac" : "-c:a aac";
-      if (clips.length === 1) {
-        const c = clips[0]!;
-        return `ffmpeg -ss ${S(c.s)} -t ${S(c.e - c.s)} -i "${input}" ${codecs} "${output}"`;
-      }
-      // One fast-seeked input per clip, joined with the concat filter.
-      const inputs = clips.map((c) => `-ss ${S(c.s)} -t ${S(c.e - c.s)} -i "${input}"`).join(" ");
-      const pads = clips.map((_, i) => (hasVideo ? `[${i}:v][${i}:a]` : `[${i}:a]`)).join("");
-      const graph = `${pads}concat=n=${clips.length}:v=${hasVideo ? 1 : 0}:a=1` + (hasVideo ? "[v][a]" : "[a]");
-      const maps = hasVideo ? `-map "[v]" -map "[a]"` : `-map "[a]"`;
-      return `ffmpeg ${inputs} -filter_complex "${graph}" ${maps} ${codecs} "${output}"`;
-    }
+    case "ffmpeg":
+      return jobToShell(buildJob({
+        input, output, ranges: clips, mode: hasVideo ? "exact" : "audio", hasVideo, fade: opts.fade ?? 0.01,
+      }));
 
     case "csv":
       return "start,end,duration,text\n" + clips.map((c) =>

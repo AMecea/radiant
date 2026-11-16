@@ -21,6 +21,7 @@ export class Timeline {
   private words: readonly Word[] = [];
   private pauses: readonly Pause[] = [];
   private clips: readonly TimeRange[] = [];
+  private removed: readonly TimeRange[] = [];
   private hits: number[] = [];
   private sel: TimeRange | null = null;
   private time = 0;
@@ -50,6 +51,7 @@ export class Timeline {
     this.invalidate();
   }
   setClips(c: readonly TimeRange[]): void { this.clips = c; this.invalidate(); }
+  setRemoved(r: readonly TimeRange[]): void { this.removed = r; this.invalidate(); }
   setHits(times: number[]): void { this.hits = times; this.invalidate(); }
   setSel(r: TimeRange | null): void { this.sel = r; this.draw(); }
   setTime(t: number): void { this.time = t; this.draw(); }
@@ -96,6 +98,14 @@ export class Timeline {
       }
       const lastEnd = this.words[this.words.length - 1]!.e;
       if (s < lastEnd) g.fillRect(this.x(s), top, Math.max(1, this.x(lastEnd) - this.x(s)), sh);
+    }
+    // Removed by text edits: struck through, speech dimmed.
+    if (this.removed.length) {
+      g.fillStyle = this.css("--cut-bg");
+      for (const r of this.removed) g.fillRect(this.x(r.s), 0, Math.max(1, this.x(r.e) - this.x(r.s)), H);
+      g.fillStyle = this.css("--cut");
+      const mid = Math.round(top + sh / 2) - dpr;
+      for (const r of this.removed) g.fillRect(this.x(r.s), mid, Math.max(1, this.x(r.e) - this.x(r.s)), 2 * dpr);
     }
     // Clips: band along the bottom.
     g.fillStyle = this.css("--clip");

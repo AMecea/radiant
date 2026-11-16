@@ -90,21 +90,9 @@ export async function byteReader(src: MediaSource): Promise<ByteReader> {
     };
   }
   const url = src.url;
-  let size: number | null = null;
-  let ranges = false;
+  let size: number | null, ranges: boolean;
   try {
-    // A 1-byte range probe tells us both the size and whether ranges work.
-    const r = await fetch(url, { headers: { Range: "bytes=0-0" } });
-    if (r.status === 206) {
-      ranges = true;
-      const cr = r.headers.get("Content-Range");
-      const m = cr?.match(/\/(\d+)$/);
-      if (m) size = Number(m[1]);
-    } else if (r.ok) {
-      const cl = r.headers.get("Content-Length");
-      if (cl) size = Number(cl);
-    }
-    await r.body?.cancel();
+    ({ size, ranges } = await probeUrl(url));
   } catch (e) {
     throw new Error(`Can't read the media bytes (${(e as Error).message}). Exporting from a URL ` +
       "needs the host to allow CORS; open the media as a local file instead.");
@@ -124,4 +112,32 @@ export async function byteReader(src: MediaSource): Promise<ByteReader> {
       return new Uint8Array(await r.arrayBuffer());
     },
   };
+}
+
+/**
+ * Does the host serve byte ranges, and how big is the file? A 1-byte range request
+ * answers both (206 + Content-Range). Cross-origin, Content-Range is only readable
+ * when the host exposes it, so fall back to a HEAD request's Content-Length.
+ */
+export async function probeUrl(url: string): Promise<{ ranges: boolean; size: number | null }> {
+  let size: number | null = null;
+  let ranges = false;
+  const r = await fetch(url, { headers: { Range: "bytes=0-0" } });
+  if (r.status === 206) {
+    ranges = true;
+    const m = r.headers.get("Content-Range")?.match(/\/(\d+)$/);
+    if (m) size = Number(m[1]);
+  } else if (r.ok) {
+    const cl = r.headers.get("Content-Length");
+    if (cl) size = Number(cl);
+  } else {
+    throw new Error(`HTTP ${r.status}`);
+  }
+  await r.body?.cancel().catch(() => {});
+  if (ranges && size == null) {
+    const hd = await fetch(url, { method: "HEAD" }).catch(() => null);
+    const cl = hd?.ok ? Number(hd.headers.get("Content-Length")) : 0;
+    if (cl > 0 && !hd!.headers.get("Content-Encoding")) size = cl;
+  }
+  return { ranges, size };
 }

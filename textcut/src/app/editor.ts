@@ -3,11 +3,14 @@ import { findPauses, mergeRanges, rangeOf, splitAtPauses, wordsIn, type Pause, t
 import { buildSearchIndex, search, type SearchIndex } from "../core/search";
 import { fmtDur, fmtShort, fmtTime } from "../core/time";
 import { CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
+import {
+  hasEdits, packEdits, rangeAt, removedRanges, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
+} from "../core/edits";
 import { buildLink, packJson, type LinkParams } from "../core/link";
-import { copyText, download, h, isTyping, modal, toast } from "./dom";
+import { copyText, h, isTyping, modal, toast } from "./dom";
 import { loadJson, loadSettings, saveJson, saveSettings, type Settings } from "./settings";
 import { mediaFromFile, mediaFromUrl, stemOf, type LoadedTranscript, type MediaSource } from "./sources";
-import { exportWav, exportWithFFmpeg, type FfmpegMode } from "./export";
+import { openExportDialog } from "./export-dialog";
 import { Timeline } from "./timeline";
 
 export interface EditorInit {
@@ -44,6 +47,16 @@ export class Editor {
   private raf = 0;
   private txPacked: Promise<string> | null = null;
 
+  // text edits
+  private delWords = new Set<number>();
+  private delGaps = new Set<number>();
+  /** time ranges the edits remove (sorted, merged) */
+  private removed: TimeRange[] = [];
+  private undoStack: PackedEdits[] = [];
+  private redoStack: PackedEdits[] = [];
+  /** the removed range playback started inside of (it plays; others are skipped) */
+  private allowRemoval: TimeRange | null = null;
+
   // DOM
   readonly root: HTMLElement;
   private video!: HTMLVideoElement;
@@ -53,6 +66,7 @@ export class Editor {
   private timeEl!: HTMLElement;
   private playBtn!: HTMLButtonElement;
   private selBar!: HTMLElement;
+  private editsEl!: HTMLElement;
   private clipsEl!: HTMLElement;
   private searchInput!: HTMLInputElement;
   private searchCount!: HTMLElement;
@@ -69,6 +83,7 @@ export class Editor {
     this.recomputePauses();
     this.renderTranscript();
     this.restoreClips();
+    this.restoreEdits();
     this.setMedia(init.media);
     this.applyLinkState();
     this.bindKeys();
@@ -119,7 +134,8 @@ export class Editor {
     }, ...[0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => h("option", { value: String(r), selected: r === s.rate }, `${r}×`)));
     const transport = h("div", { class: "transport" }, this.playBtn, this.timeEl, h("span", { class: "spacer" }), rate,
       this.toggle("Follow", "Keep the current word in view", "follow"),
-      this.toggle("Skip pauses", "Jump over pauses while playing (preview of a tightened cut)", "skipPauses"));
+      this.toggle("Skip pauses", "Jump over pauses while playing (preview of a tightened cut)", "skipPauses"),
+      this.toggle("Skip cuts", "Jump over deleted words and pauses while playing (preview the edit)", "previewEdits"));
 
     this.timeline = new Timeline({
       seek: (t) => this.seek(t),
@@ -130,6 +146,7 @@ export class Editor {
     });
 
     this.selBar = h("div", { class: "selbar" });
+    this.editsEl = h("section", { class: "edits" });
     this.clipsEl = h("section", { class: "clips" });
     this.trEl = h("article", { class: "transcript", tabindex: "0", "aria-label": "Transcript" });
 
@@ -138,7 +155,7 @@ export class Editor {
           "they're approximate. Re-run the transcribe step with word_timestamps: true for exact cuts.")
       : null;
 
-    const left = h("section", { class: "left" }, this.playerBox, transport, this.timeline.el, this.selBar, this.clipsEl);
+    const left = h("section", { class: "left" }, this.playerBox, transport, this.timeline.el, this.selBar, this.editsEl, this.clipsEl);
     const right = h("section", { class: "right" }, approx, this.trEl);
     const root = h("div", { class: "app editor-view" }, top, h("main", { class: "editor" }, left, right));
 
@@ -149,9 +166,9 @@ export class Editor {
     return root;
   }
 
-  private toggle(label: string, title: string, key: "follow" | "skipPauses"): HTMLElement {
+  private toggle(label: string, title: string, key: "follow" | "skipPauses" | "previewEdits"): HTMLElement {
     const input = h("input", {
-      type: "checkbox", checked: this.settings[key],
+      type: "checkbox", checked: this.settings[key], "data-key": key,
       onchange: () => { this.settings[key] = input.checked; saveSettings(this.settings); },
     });
     return h("label", { class: "chk", title }, input, label);
@@ -237,6 +254,7 @@ export class Editor {
   seek(t: number, keepMode = false): void {
     if (!keepMode) this.setMode({ kind: "free" });
     t = Math.max(0, Math.min(this.duration || t, t));
+    this.allowRemoval = rangeAt(this.removed, t);
     if (!this.media) {
       // No media: still move the "cursor" so the transcript follows.
       this.updateCurrent(wordAt(this.words, t + 1e-4), true);
@@ -281,6 +299,13 @@ export class Editor {
     const v = this.video;
     const t = v.currentTime;
     const m = this.mode;
+    if (!v.paused && this.settings.previewEdits && this.removed.length) {
+      // Preview the edit: jump over removed stretches — except one we were put into
+      // on purpose (clicked a deleted word to hear it).
+      const r = rangeAt(this.removed, t);
+      if (!r) this.allowRemoval = null;
+      else if (r !== this.allowRemoval) v.currentTime = r.e;
+    }
     if (!v.paused) {
       if (m.kind === "until" && t >= m.e) {
         v.pause();
@@ -292,7 +317,7 @@ export class Editor {
         const cur = m.list[m.i]!;
         if (t >= cur.e) {
           m.i++;
-          if (m.i < m.list.length) v.currentTime = m.list[m.i]!.s;
+          if (m.i < m.list.length) { v.currentTime = m.list[m.i]!.s; this.allowRemoval = rangeAt(this.removed, v.currentTime); }
           else { v.pause(); this.setMode({ kind: "free" }); }
           this.highlightPlayingClip();
         }
@@ -341,6 +366,8 @@ export class Editor {
 
   private recomputePauses(): void {
     this.pauses = findPauses(this.words, this.settings.pauseMin, this.duration);
+    this.removed = removedRanges(this.words, this.edits, this.cutParams);
+    this.timeline.setRemoved(this.removed);
     if (this.trEl.childElementCount) this.renderTranscript();
     this.timeline.setData(this.words, this.pauses, this.duration);
     this.timeline.setClips(this.clips);
@@ -350,10 +377,12 @@ export class Editor {
   private renderTranscript(): void {
     const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
     const pauseAfter = new Map(this.pauses.map((p) => [p.after, p]));
+    // Deleted gaps stay visible even when they're shorter than the pause threshold.
+    for (const g of this.delGaps) if (!pauseAfter.has(g)) { const p = this.gapAt(g); if (p) pauseAfter.set(g, p); }
     const html: string[] = [];
     const pauseHtml = (p: Pause) =>
-      `<span class="pause${p.d >= 2 ? " long" : ""}" data-pause="${p.after}" contenteditable="false" ` +
-      `title="${p.d.toFixed(2)}s pause · click to play around it">${p.d.toFixed(1)}s</span>`;
+      `<span class="pause${p.d >= 2 ? " long" : ""}${this.delGaps.has(p.after) ? " del" : ""}" data-pause="${p.after}" contenteditable="false" ` +
+      `title="${p.d.toFixed(2)}s pause · click: play around it · Alt+click: delete / restore">${p.d.toFixed(1)}s</span>`;
     const lead = pauseAfter.get(-1);
     for (const [si, sg] of this.t.segments.entries()) {
       html.push(`<p class="seg" data-seg="${si}"><button class="ts mono" data-t="${sg.s}" tabindex="-1" ` +
@@ -362,7 +391,8 @@ export class Editor {
       for (let i = sg.first; i <= sg.last; i++) {
         const w = this.words[i]!;
         const low = w.p != null && w.p < 0.5 ? " low" : "";
-        html.push(`<span class="w${low}" data-i="${i}">${esc(w.w)}</span>`);
+        const del = this.delWords.has(i) ? " del" : "";
+        html.push(`<span class="w${low}${del}" data-i="${i}">${esc(w.w)}</span>`);
         const p = pauseAfter.get(i);
         const next = i < sg.last ? this.words[i + 1]!.w : "";
         html.push(p ? ` ${pauseHtml(p)} ` : next && gluesToPrev(next) ? "" : " ");
@@ -397,7 +427,9 @@ export class Editor {
     if (sel && !sel.isCollapsed) return; // a drag-select, handled on mouseup
     const pause = target.closest<HTMLElement>(".pause");
     if (pause) {
-      const p = this.pauses.find((x) => x.after === Number(pause.dataset.pause));
+      const g = Number(pause.dataset.pause);
+      if (e.altKey) { this.toggleGaps([g]); return; }
+      const p = this.gapAt(g);
       if (p) this.playRange({ s: Math.max(0, p.s - 1.5), e: p.e + 1.5 });
       return;
     }
@@ -495,6 +527,8 @@ export class Editor {
     const st = this.settings.timeStyle;
     const text = textOf(this.words, this.sel.a, this.sel.b);
     const nPauses = this.pauses.filter((p) => p.after >= this.sel!.a && p.after < this.sel!.b).length;
+    const allDel = this.selAllDeleted();
+    const selGaps = this.selPauses();
     this.loopBtn = h("button", { title: "Loop selection (L)", onclick: () => this.toggleLoop() }, "⟲ Loop");
     bar.append(
       h("div", { class: "sel-times" },
@@ -515,7 +549,16 @@ export class Editor {
         h("span", { class: "spacer" }),
         h("button", { title: "Add as one clip (A)", onclick: () => this.addSelAsClip(false) }, "+ Clip"),
         nPauses ? h("button", { title: "Add as clips with the pauses cut out (S)", onclick: () => this.addSelAsClip(true) }, "+ Clips w/o pauses") : null,
-        h("button", { title: "Export just this selection", onclick: () => this.exportDialog([{ ...r, text }]) }, "Export…")));
+        h("button", { title: "Export just this selection", onclick: () => this.exportRanges("Export selection", [{ ...r, text }]) }, "Export…")),
+      h("div", { class: "row edit-row" },
+        h("button", {
+          class: allDel ? "" : "danger", title: allDel ? "Put these words back (Delete)" : "Cut these words out of the edit (Delete)",
+          onclick: () => this.deleteSel(),
+        }, allDel ? "↺ Restore words" : "✂ Delete words"),
+        selGaps.length ? h("button", {
+          title: "Shorten the pauses inside the selection (P)", onclick: () => this.toggleGaps(selGaps),
+        }, selGaps.every((g) => this.delGaps.has(g)) ? `↺ Restore ${selGaps.length} pause${selGaps.length > 1 ? "s" : ""}`
+                                                     : `✂ Cut ${selGaps.length} pause${selGaps.length > 1 ? "s" : ""}`) : null));
   }
 
   private toggleLoop(): void {
@@ -640,12 +683,15 @@ export class Editor {
     el.append(ol);
     el.append(h("div", { class: "row wrap" },
       fmtSel,
-      h("button", { onclick: () => void copyText(this.formatClips(this.settings.copyFormat), "Clips") }, "Copy"),
+      h("button", {
+        title: "Copy the clips in this format (deleted words inside them are left out)",
+        onclick: () => void copyText(this.formatClips(this.settings.copyFormat, this.applyEdits(this.clips)), "Clips"),
+      }, "Copy"),
       h("span", { class: "spacer" }),
       h("button", { title: "Sort by time and merge overlaps", onclick: () => this.tidyClips() }, "Sort"),
       h("button", { title: "Split every clip at its pauses", onclick: () => this.tightenClips() }, "Cut pauses"),
       h("button", { onclick: () => { if (confirm("Remove all clips?")) { this.clips = []; this.clipsChanged(); } } }, "Clear"),
-      h("button", { class: "primary", onclick: () => this.exportDialog(this.clips) }, "Export…")));
+      h("button", { class: "primary", onclick: () => this.exportRanges("Export clips", this.clips) }, "Export…")));
     this.highlightPlayingClip();
   }
 
@@ -752,6 +798,7 @@ export class Editor {
     if (o.kind === "url") p.words = o.url;
     else p.tx = await (this.txPacked ??= packJson(compactTranscript(this.t)));
     if (this.clips.length) p.clips = this.clips;
+    Object.assign(p, packEdits(this.edits));
     if (withSel && this.sel) { p.sel = this.selRange(); p.at = p.sel.s; }
     return { p, warnings };
   }
@@ -773,6 +820,7 @@ export class Editor {
     ta.value = link;
     const body = h("div", {},
       h("p", {}, "Opens this transcript", p.media ? " and media" : "", this.clips.length ? ` with ${this.clips.length} clips` : "",
+        hasEdits(this.edits) ? `${this.clips.length ? " and" : " with"} your text edits` : "",
         ". Everything is in the link — nothing is uploaded."),
       ta,
       h("p", { class: "muted" }, `${link.length.toLocaleString()} characters`,
@@ -784,80 +832,230 @@ export class Editor {
     ]);
   }
 
+  // ======================================================== text edits
+
+  private get edits(): Edits {
+    return { words: this.delWords, gaps: this.delGaps };
+  }
+
+  private get cutParams(): CutParams {
+    return { pad: this.settings.pad, pauseKeep: this.settings.pauseKeep, duration: this.duration };
+  }
+
+  private get editsKey(): string {
+    return this.clipsKey.replace(".clips.", ".edits.");
+  }
+
+  private restoreEdits(): void {
+    const { dw, dg } = this.init.link;
+    const packed = dw || dg ? { dw, dg } : loadJson<PackedEdits>(this.editsKey);
+    const ed = unpackEdits(packed, this.words.length);
+    this.delWords = new Set(ed.words);
+    this.delGaps = new Set(ed.gaps);
+    this.editsChanged(false);
+  }
+
+  /** The silence after word g (-1: before the first word), whatever its length. */
+  private gapAt(g: number): Pause | null {
+    const w = this.words, n = w.length;
+    if (!n || g < -1 || g >= n) return null;
+    const s = g < 0 ? 0 : w[g]!.e;
+    const e = g < 0 ? w[0]!.s : g === n - 1 ? Math.max(this.duration, w[n - 1]!.e) : w[g + 1]!.s;
+    return { after: g, s, e, d: e - s };
+  }
+
+  /** Pauses (>= threshold) inside the selection, incl. the head/tail silence at its edges. */
+  private selPauses(): number[] {
+    if (!this.sel) return [];
+    const { a, b } = this.sel, n = this.words.length;
+    return this.pauses.filter((p) => (p.after >= a && p.after < b) || (p.after === -1 && a === 0) ||
+                                      (p.after === n - 1 && b === n - 1)).map((p) => p.after);
+  }
+
+  private selAllDeleted(): boolean {
+    if (!this.sel) return false;
+    for (let i = this.sel.a; i <= this.sel.b; i++) if (!this.delWords.has(i)) return false;
+    return true;
+  }
+
+  private snapshot(): void {
+    this.undoStack.push(packEdits(this.edits));
+    if (this.undoStack.length > 300) this.undoStack.shift();
+    this.redoStack = [];
+  }
+
+  /** Delete the selected words — or restore them, if they're all deleted already. */
+  private deleteSel(): void {
+    if (!this.sel) return;
+    const { a, b } = this.sel;
+    const restore = this.selAllDeleted();
+    this.snapshot();
+    for (let i = a; i <= b; i++) {
+      if (restore) this.delWords.delete(i); else this.delWords.add(i);
+    }
+    // Deleting words also clears pause marks inside them (the word cut covers them).
+    if (restore) for (let g = a - 1; g <= b; g++) this.delGaps.delete(g);
+    this.editsChanged();
+    toast(restore ? `Restored ${b - a + 1} word${b > a ? "s" : ""}` : `Cut ${b - a + 1} word${b > a ? "s" : ""}`, "info");
+    if (!restore) {
+      // Move on, like deleting text: the cursor lands after the cut.
+      this.clearSel();
+      if (b + 1 < this.words.length) this.seek(this.words[b + 1]!.s);
+    } else this.renderSelBar();
+  }
+
+  /** Cut the given gaps — or restore them, if they're all cut already. */
+  private toggleGaps(gaps: readonly number[]): void {
+    if (!gaps.length) return;
+    const restore = gaps.every((g) => this.delGaps.has(g));
+    this.snapshot();
+    for (const g of gaps) { if (restore) this.delGaps.delete(g); else this.delGaps.add(g); }
+    this.editsChanged();
+    toast(`${restore ? "Restored" : "Shortened"} ${gaps.length} pause${gaps.length > 1 ? "s" : ""}` +
+          (restore ? "" : ` to ${this.settings.pauseKeep}s`), "info");
+  }
+
+  private undo(redo = false): void {
+    const from = redo ? this.redoStack : this.undoStack;
+    const to = redo ? this.undoStack : this.redoStack;
+    const st = from.pop();
+    if (!st) { toast(redo ? "Nothing to redo" : "Nothing to undo", "info"); return; }
+    to.push(packEdits(this.edits));
+    const ed = unpackEdits(st, this.words.length);
+    this.delWords = new Set(ed.words);
+    this.delGaps = new Set(ed.gaps);
+    this.editsChanged();
+    toast(redo ? "Redone" : "Undone", "info");
+  }
+
+  private resetEdits(): void {
+    if (!hasEdits(this.edits)) return;
+    this.snapshot();
+    this.delWords.clear();
+    this.delGaps.clear();
+    this.editsChanged();
+  }
+
+  private editsChanged(save = true): void {
+    if (save) saveJson(this.editsKey, packEdits(this.edits));
+    this.txPacked = null;
+    this.removed = removedRanges(this.words, this.edits, this.cutParams);
+    this.timeline.setRemoved(this.removed);
+    if (this.trEl.childElementCount) this.paintEdits();
+    this.renderEdits();
+    this.renderSelBar();
+  }
+
+  /** Update word/pause marks in place (full re-render only when a hidden gap must appear). */
+  private paintEdits(): void {
+    for (const [i, el] of this.wordEls.entries()) el.classList.toggle("del", this.delWords.has(i));
+    const shown = new Set<number>();
+    for (const el of this.trEl.querySelectorAll<HTMLElement>(".pause")) {
+      const g = Number(el.dataset.pause);
+      shown.add(g);
+      el.classList.toggle("del", this.delGaps.has(g));
+    }
+    const pauseSet = new Set(this.pauses.map((p) => p.after));
+    const stale = [...this.delGaps].some((g) => !shown.has(g)) || [...shown].some((g) => !pauseSet.has(g) && !this.delGaps.has(g));
+    if (stale) {
+      const top = this.trEl.scrollTop;
+      this.renderTranscript();
+      this.trEl.scrollTop = top;
+    }
+  }
+
+  private renderEdits(): void {
+    const el = this.editsEl;
+    el.replaceChildren();
+    const ed = this.edits;
+    if (!hasEdits(ed)) {
+      el.classList.remove("active");
+      el.append(h("p", { class: "hint" }, "Edit by text: select words and press ", h("kbd", {}, "Delete"),
+        " to cut them, ", h("kbd", {}, "P"), " to shorten the pauses in the selection. ",
+        this.pauses.length ? h("button", { class: "linkish", onclick: () => this.toggleGaps(this.pauses.map((p) => p.after)) },
+          `Shorten all ${this.pauses.length} pauses`) : null,
+        this.pauses.length ? " · " : null,
+        h("button", { class: "linkish", title: "Export the whole recording (crop, resize, audio filters…)", onclick: () => this.exportEdit() },
+          "Export the whole recording…")));
+      return;
+    }
+    el.classList.add("active");
+    const cut = this.removed.reduce((n, r) => n + (r.e - r.s), 0);
+    const total = Math.max(this.duration, this.words.at(-1)?.e ?? 0);
+    const undeleted = this.pauses.filter((p) => !this.delGaps.has(p.after)).map((p) => p.after);
+    el.append(
+      h("header", {},
+        h("h3", {}, "Edit"),
+        h("span", { class: "muted" },
+          [ed.words.size && `${ed.words.size} word${ed.words.size > 1 ? "s" : ""}`,
+           ed.gaps.size && `${ed.gaps.size} pause${ed.gaps.size > 1 ? "s" : ""}`].filter(Boolean).join(", ") +
+          ` cut · ${fmtDur(total)} → ${fmtDur(total - cut)}`),
+        h("span", { class: "spacer" }),
+        h("button", { class: "icon", title: "Undo (⌘Z / Ctrl+Z)", disabled: !this.undoStack.length, onclick: () => this.undo() }, "↶"),
+        h("button", { class: "icon", title: "Redo (⇧⌘Z / Ctrl+Y)", disabled: !this.redoStack.length, onclick: () => this.undo(true) }, "↷")),
+      h("div", { class: "row wrap" },
+        h("button", { title: "Play the edited cut from the start", onclick: () => this.playEdit() }, "▶ Play edit"),
+        undeleted.length ? h("button", { title: "Shorten every remaining pause", onclick: () => this.toggleGaps(undeleted) },
+          `Shorten ${undeleted.length} more pause${undeleted.length > 1 ? "s" : ""}`) : null,
+        h("button", { onclick: () => { if (confirm("Restore every deleted word and pause?")) this.resetEdits(); } }, "Reset"),
+        h("span", { class: "spacer" }),
+        h("button", { class: "primary", title: "Render the edited cut, or get its ffmpeg command", onclick: () => this.exportEdit() }, "Export edit…")));
+  }
+
+  private playEdit(): void {
+    const keep = subtractRanges([{ s: 0, e: this.duration }], this.removed);
+    if (!keep.length) return;
+    if (!this.settings.previewEdits) {
+      this.settings.previewEdits = true;
+      saveSettings(this.settings);
+      const chk = this.root.querySelector<HTMLInputElement>('.transport input[data-key="previewEdits"]');
+      if (chk) chk.checked = true;
+    }
+    this.seek(keep[0]!.s);
+    void this.video.play();
+  }
+
+  /** `ranges` minus what the text edits removed, with their text recomputed. */
+  private applyEdits(ranges: readonly Clip[]): Clip[] {
+    if (!this.removed.length) return ranges.map((c) => ({ ...c }));
+    return subtractRanges(ranges, this.removed).map((r) => ({ ...r, text: this.textIn(r) }));
+  }
+
   // ======================================================== export
 
-  private exportDialog(clips: readonly Clip[]): void {
-    if (!clips.length) return;
-    const total = clips.reduce((n, c) => n + (c.e - c.s), 0);
-    const hasMedia = !!this.media;
-    const v = this.hasVideo;
-    const srcExt = this.media?.name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? "";
-    type Opt = { id: "wav" | FfmpegMode; label: string; note: string; ok: boolean };
-    const opts: Opt[] = [
-      { id: "wav", label: "WAV audio", note: srcExt === "wav" ? "instant, lossless — cut straight from the file" : "decoded in the browser", ok: hasMedia },
-      { id: "video-copy", label: v ? `Video, fast (${srcExt === "mov" ? "MOV" : "MP4"}, no re-encode)` : `Original format (${srcExt.toUpperCase() || "copy"}, no re-encode)`,
-        note: v ? "quick; cut points snap to the nearest keyframe (can be ~1–2 s early)" : "quick, lossless", ok: hasMedia },
-      { id: "video-encode", label: "Video, exact (MP4 re-encode)", note: "frame-accurate; slow in the browser (≈ real time or slower)", ok: hasMedia && v },
-      { id: "mp3", label: "MP3 audio", note: "re-encoded", ok: hasMedia },
-      { id: "m4a", label: "M4A (AAC) audio", note: "re-encoded", ok: hasMedia },
-    ];
-    let choice: Opt["id"] = v ? "video-copy" : "wav";
-    const list = h("div", { class: "choices" }, ...opts.filter((o) => o.ok).map((o) => {
-      const input = h("input", { type: "radio", name: "fmt", value: o.id, checked: o.id === choice, onchange: () => { choice = o.id; } });
-      return h("label", { class: "choice" }, input, h("span", {}, h("strong", {}, o.label), h("small", {}, o.note)));
-    }));
-    const stem = stemOf(this.media?.name ?? this.title);
-    const name = h("input", { type: "text", value: `${stem}_cut`, "aria-label": "File name" });
-    const bar = h("progress", { max: 1, value: 0, hidden: true });
-    const status = h("p", { class: "muted" });
-    const logEl = h("pre", { class: "log" });
-    const cmd = h("details", {},
-      h("summary", {}, "Or run it yourself (ffmpeg / radiant)"),
-      ...(["ffmpeg", "trim-yaml", "clip-yaml"] as ClipFormat[]).map((k) =>
-        h("div", { class: "snippet" },
-          h("div", { class: "row" }, h("strong", {}, CLIP_FORMATS.find((f) => f.id === k)!.label), h("span", { class: "spacer" }),
-            h("button", { onclick: () => void copyText(this.formatClips(k, clips), "Copied") }, "Copy")),
-          h("pre", { class: "mono" }, this.formatClips(k, clips)))));
-    const body = h("div", {},
-      h("p", {}, `${clips.length} range${clips.length > 1 ? "s" : ""}, ${fmtDur(total)} total.`),
-      hasMedia ? list : h("p", { class: "notice" }, "Load the media to export in the browser — or copy a command below."),
-      hasMedia ? h("label", { class: "field" }, "File name", name) : null,
-      bar, status, h("details", { class: "logbox" }, h("summary", {}, "ffmpeg log"), logEl), cmd);
-    const go = h("button", { class: "primary", disabled: !hasMedia }, "Export");
-    const dlg = modal("Export cut", body, [go]);
-    go.onclick = async () => {
-      if (!this.media) return;
-      go.disabled = true;
-      bar.hidden = false;
-      const progress = (msg: string, frac?: number) => {
-        status.textContent = msg;
-        if (frac == null) bar.removeAttribute("value"); else bar.value = frac;
-      };
-      try {
-        const ranges = clips.map((c) => ({ s: c.s, e: c.e }));
-        let blob: Blob, ext: string;
-        if (choice === "wav") { blob = await exportWav(this.media, ranges, progress); ext = "wav"; }
-        else {
-          ({ blob, ext } = await exportWithFFmpeg(this.media, ranges, { mode: choice, hasVideo: this.hasVideo }, progress,
-            (line) => { logEl.textContent += line + "\n"; }));
-        }
-        download(blob, `${name.value || stem + "_cut"}.${ext}`);
-        status.textContent = `Saved ${name.value}.${ext} (${(blob.size / 1e6).toFixed(1)} MB)`;
-        if (!dlg.el.open) toast("Export finished");
-      } catch (e) {
-        status.textContent = (e as Error).message;
-        status.className = "error";
-      } finally {
-        go.disabled = false;
-      }
-    };
+  private exportEdit(): void {
+    const keep = subtractRanges([{ s: 0, e: Math.max(this.duration, this.words.at(-1)?.e ?? 0) }], this.removed);
+    const cut = this.removed.reduce((n, r) => n + (r.e - r.s), 0);
+    this.exportRanges("Export edit", keep.map((r) => ({ ...r, text: this.textIn(r) })),
+      hasEdits(this.edits) ? `${fmtDur(cut)} cut out in ${this.removed.length} place${this.removed.length > 1 ? "s" : ""}.` : undefined,
+      false);
+  }
+
+  /** Export ranges (clips / a selection): the text edits inside them are applied. */
+  private exportRanges(heading: string, ranges: readonly Clip[], summary?: string, applyEdits = true): void {
+    const list = applyEdits ? this.applyEdits(ranges) : [...ranges];
+    if (!list.length) { toast("Nothing left to export — it's all been cut", "err"); return; }
+    const dur = (rs: readonly TimeRange[]) => rs.reduce((n, r) => n + (r.e - r.s), 0);
+    if (applyEdits && dur(list) < dur(ranges) - 0.001) {
+      summary ??= "Deleted words and pauses inside them are left out.";
+    }
+    const v = this.video;
+    openExportDialog({
+      heading, summary, ranges: list,
+      media: this.media, hasVideo: this.hasVideo,
+      frame: this.hasVideo && v.videoWidth ? { width: v.videoWidth, height: v.videoHeight } : null,
+      video: v,
+      stem: stemOf(this.media?.name ?? this.title),
+      settings: this.settings,
+      format: (k, c) => this.formatClips(k, c),
+    });
   }
 
   // ======================================================== dialogs
 
   private settingsDialog(): void {
     const s = this.settings;
-    const num = (label: string, key: "pauseMin" | "pad", min: number, max: number, step: number, help: string) => {
+    const num = (label: string, key: "pauseMin" | "pad" | "pauseKeep", min: number, max: number, step: number, help: string) => {
       const input = h("input", { type: "number", min, max, step, value: String(s[key]) });
       input.onchange = () => {
         const v = Number(input.value);
@@ -865,6 +1063,7 @@ export class Editor {
         s[key] = Math.max(min, Math.min(max, v));
         saveSettings(s);
         if (key === "pauseMin") this.recomputePauses();
+        else this.editsChanged(false);
         this.renderSelBar();
         this.timeline.setSel(this.sel ? this.selRange() : null);
       };
@@ -877,6 +1076,7 @@ export class Editor {
     modal("Settings", h("div", { class: "form" },
       num("Pause threshold (s)", "pauseMin", 0.1, 10, 0.1, "Gaps between words at least this long are marked as pauses, cut by “w/o pauses”, and skipped by “Skip pauses”."),
       num("Padding (s)", "pad", 0, 1, 0.01, "Added before/after every selection and clip so cuts don't clip syllables. Never extends past the middle of the gap to the next word."),
+      num("Shortened pause (s)", "pauseKeep", 0, 3, 0.05, "A cut pause keeps this much silence (at least twice the padding), so speech doesn't run together."),
       h("label", { class: "field" }, "Copied time format", style)));
   }
 
@@ -888,6 +1088,9 @@ export class Editor {
       ["Enter", "Play selection"], ["L", "Loop selection"], ["A", "Add selection as clip"],
       ["S", "Add selection as clips without pauses"], ["C", "Copy selection times"],
       ["[  ]", "Copy start / end time"], ["/", "Search"], ["Enter / Shift+Enter (in search)", "Next / previous match"],
+      ["Delete / Backspace", "Cut the selected words (again: restore)"],
+      ["P", "Shorten the pauses in the selection"], ["Alt+click pause", "Cut / restore that pause"],
+      ["⌘Z / Ctrl+Z", "Undo an edit"], ["⇧⌘Z / Ctrl+Y", "Redo"],
       ["Esc", "Clear selection / stop looping"],
     ];
     modal("Keyboard shortcuts", h("table", { class: "keys" },
@@ -904,6 +1107,14 @@ export class Editor {
         this.searchInput.focus();
         this.searchInput.select();
         return;
+      }
+      if (!isTyping(e) && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (k === "z" || k === "y") {
+          e.preventDefault();
+          this.undo(k === "y" || e.shiftKey);
+          return;
+        }
       }
       if (isTyping(e) || e.metaKey || e.ctrlKey) return;
       const st = this.settings.timeStyle;
@@ -927,6 +1138,8 @@ export class Editor {
         case "a": case "A": this.addSelAsClip(false); break;
         case "s": case "S": this.addSelAsClip(true); break;
         case "c": case "C": this.copySelRange(); break;
+        case "Delete": case "Backspace": if (this.sel) { e.preventDefault(); this.deleteSel(); } break;
+        case "p": case "P": if (this.sel) this.toggleGaps(this.selPauses()); break;
         case "[": if (this.sel) void copyText(fmtTime(this.selRange().s, st), "Start"); break;
         case "]": if (this.sel) void copyText(fmtTime(this.selRange().e, st), "End"); break;
         case "?": this.helpDialog(); break;

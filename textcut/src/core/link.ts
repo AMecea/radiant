@@ -12,6 +12,8 @@ import type { TimeRange } from "./ranges";
  *   clips  "s-e,s-e,…" clip list (seconds or clock times)
  *   sel    "s-e" selection to restore
  *   at     start position, seconds or clock time
+ *   dw     deleted words, by index: "3-5,10"
+ *   dg     deleted pauses, by (index of the word before them) + 1: "0,14"
  */
 export interface LinkParams {
   words?: string;
@@ -21,6 +23,8 @@ export interface LinkParams {
   clips?: TimeRange[];
   sel?: TimeRange;
   at?: number;
+  dw?: string;
+  dg?: string;
 }
 
 export function readLink(loc: { search: string; hash: string }): LinkParams {
@@ -33,6 +37,9 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   if (media) out.media = media;
   if (tx) out.tx = tx;
   if (title) out.title = title;
+  const dw = get("dw"), dg = get("dg");
+  if (dw) out.dw = dw;
+  if (dg) out.dg = dg;
   const clips = get("clips");
   if (clips) out.clips = decodeRanges(clips);
   const sel = get("sel");
@@ -54,6 +61,8 @@ export function buildLink(base: string, p: LinkParams): string {
   if (p.clips?.length) h.set("clips", encodeRanges(p.clips));
   if (p.sel) h.set("sel", encodeRanges([p.sel]));
   if (p.at != null) h.set("at", String(+p.at.toFixed(3)));
+  if (p.dw) h.set("dw", p.dw);
+  if (p.dg) h.set("dg", p.dg);
   if (p.tx) h.set("tx", p.tx); // last: it's the long one
   const frag = h.toString().replace(/%2F/gi, "/").replace(/%3A/gi, ":").replace(/%2C/gi, ",");
   return `${base.replace(/#.*$/, "")}#${frag}`;

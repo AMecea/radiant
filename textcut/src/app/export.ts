@@ -4,15 +4,22 @@
  *  - WAV: native. A PCM .wav source is cut straight from its bytes (File.slice /
  *    HTTP Range), so even hour-long masters export instantly without decoding.
  *    Anything else (mp3, m4a, mp4…) is decoded with WebAudio first.
- *  - Everything else (mp4, mp3, m4a…): ffmpeg.wasm, downloaded on first use
- *    (~32 MB, cached by the browser afterwards). Single-threaded build, so it
- *    works on any static host without cross-origin-isolation headers.
+ *  - Everything else (mp4, mp3, m4a…, crop & filters): ffmpeg.wasm, downloaded on
+ *    first use (~32 MB, cached by the browser afterwards). Single-threaded build, so
+ *    it works on any static host without cross-origin-isolation headers.
+ *
+ * ffmpeg never needs the whole recording in memory: a local File is read lazily
+ * from disk (WORKERFS), and a URL that supports HTTP Range is read lazily over the
+ * network (see ffmpeg-worker.ts) — only the index and the stretches being cut are
+ * fetched. Hosts without Range support fall back to a full download.
  */
 
-import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import type { TimeRange } from "../core/ranges";
+import { buildJob, type CutSpec } from "../core/ffjob";
 import { encodeWav, parseWavHeader, pcmToFloat, wavByteRange } from "../core/wav";
-import { byteReader, type MediaSource } from "./sources";
+import { fmtBytes } from "./dom";
+import { FFmpegWorker, type NetStats } from "./ffmpeg-client";
+import { byteReader, probeUrl, type MediaSource } from "./sources";
 
 export type Progress = (msg: string, frac?: number) => void;
 
@@ -66,8 +73,6 @@ export async function exportWav(src: MediaSource, ranges: readonly TimeRange[], 
 
 const CORE_BASE = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/esm";
 
-let ffmpegPromise: Promise<FFmpeg> | null = null;
-
 /**
  * fetch → blob: URL, reporting progress. (Our own instead of @ffmpeg/util's
  * toBlobURL, which fails when the CDN compresses the response: Content-Length is
@@ -90,124 +95,140 @@ async function toBlobURL(url: string, type: string, onProgress?: (frac: number) 
   return URL.createObjectURL(new Blob(chunks as BlobPart[], { type }));
 }
 
-async function getFFmpeg(progress: Progress): Promise<FFmpeg> {
-  ffmpegPromise ??= (async () => {
-    const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-    const ff = new FFmpeg();
+let coreUrls: Promise<{ coreURL: string; wasmURL: string }> | null = null;
+let current: FFmpegWorker | null = null;
+
+/** A loaded ffmpeg worker; a new one after a cancel (the core download is reused). */
+async function getFFmpeg(progress: Progress): Promise<FFmpegWorker> {
+  if (current && !current.dead) return current;
+  const urls = coreUrls ??= (async () => {
     progress("Downloading ffmpeg.wasm (~32 MB, first time only)…", 0);
     const coreURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, "text/javascript");
     const wasmURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, "application/wasm",
       (f) => progress(`Downloading ffmpeg.wasm… ${Math.round(f * 100)}%`, f));
-    progress("Starting ffmpeg…");
-    await ff.load({ coreURL, wasmURL });
-    return ff;
+    return { coreURL, wasmURL };
   })();
   try {
-    return await ffmpegPromise;
+    const { coreURL, wasmURL } = await urls;
+    progress("Starting ffmpeg…");
+    const ff = new FFmpegWorker();
+    await ff.load(coreURL, wasmURL);
+    current = ff;
+    return ff;
   } catch (e) {
-    ffmpegPromise = null;
+    coreUrls = null;
     throw e;
   }
 }
 
-export type FfmpegMode =
-  | "video-copy"    // stream copy: instant, cuts snap to keyframes
-  | "video-encode"  // H.264/AAC re-encode: frame-accurate, slow in wasm
-  | "mp3"
-  | "m4a";
-
-export interface FfmpegExport {
-  mode: FfmpegMode;
-  hasVideo: boolean;
+export interface RunCut {
+  /** the cut, minus input/output names (those depend on where it runs) */
+  spec: Omit<CutSpec, "input" | "output" | "tmp">;
+  ext: string;
+  progress: Progress;
+  log?: (line: string) => void;
+  signal?: AbortSignal;
 }
 
-export async function exportWithFFmpeg(
-  src: MediaSource, ranges: readonly TimeRange[], opts: FfmpegExport, progress: Progress,
-  log?: (line: string) => void,
-): Promise<{ blob: Blob; ext: string }> {
-  if (!ranges.length) throw new Error("Nothing to export");
+const MIME: Record<string, string> = {
+  mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska", webm: "video/webm",
+  m4a: "audio/mp4", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", opus: "audio/ogg", flac: "audio/flac",
+};
+
+let runSeq = 0;
+
+/** Run a cut with ffmpeg.wasm and return the result. */
+export async function runCut(src: MediaSource, o: RunCut): Promise<{ blob: Blob; ext: string; net: NetStats | null }> {
+  const { progress, signal } = o;
+  if (signal?.aborted) throw new Error("Cancelled");
   const ff = await getFFmpeg(progress);
-  const logger = ({ message }: { message: string }) => log?.(message);
-  ff.on("log", logger);
+  const onAbort = () => ff.kill(new Error("Cancelled"));
+  signal?.addEventListener("abort", onAbort);
 
-  const srcExt = (src.name.match(/\.([a-z0-9]+)$/i)?.[1] ?? "mp4").toLowerCase();
-  let input: string;
+  let net: NetStats | null = null;
+  let status = "";
+  const show = (frac?: number) => progress(
+    status + (net ? ` · fetched ${fmtBytes(net.fetched)} of ${fmtBytes(net.size)}` : ""), frac);
+
+  const dir = `/src${++runSeq}`;
   const cleanup: Array<() => Promise<unknown>> = [];
-  if (src.kind === "file") {
-    // WORKERFS reads the File lazily — no copy of a multi-GB master into memory.
-    await ff.createDir("/in").catch(() => {});
-    await ff.mount("WORKERFS" as never, { files: [src.file] }, "/in");
-    cleanup.push(() => ff.unmount("/in"));
-    input = `/in/${src.file.name}`;
-  } else {
-    progress("Downloading media…");
-    input = `/input.${srcExt}`;
-    const res = await fetch(src.url).catch((e: Error) => {
-      throw new Error(`Couldn't download the media (${e.message}) — the host must allow CORS; or open it as a local file.`);
-    });
-    if (!res.ok) throw new Error(`Media download failed: HTTP ${res.status}`);
-    await ff.writeFile(input, new Uint8Array(await res.arrayBuffer()));
-    cleanup.push(() => ff.deleteFile(input));
-  }
-
-  const total = ranges.reduce((n, r) => n + (r.e - r.s), 0);
-  let done = 0;
-  const onProgress = ({ time }: { time: number }) => {
-    // `time` is microseconds of output written by the current exec.
-    const t = Math.max(0, time / 1e6);
-    progress(`Rendering… ${Math.round(((done + t) / total) * 100)}%`, Math.min(1, (done + t) / total));
-  };
-  ff.on("progress", onProgress);
-
-  const S = (t: number) => t.toFixed(3);
-  const run = async (args: string[]) => {
-    const code = await ff.exec(args);
-    if (code !== 0) throw new Error(`ffmpeg exited with code ${code} — see the log`);
-  };
-
   try {
-    let out: string, ext: string, mime: string;
-    if (opts.mode === "video-copy") {
-      ext = opts.hasVideo ? (["mp4", "mov", "m4v", "mkv", "webm"].includes(srcExt) ? srcExt : "mp4") : srcExt;
-      const parts: string[] = [];
-      for (const [i, r] of ranges.entries()) {
-        const part = `/part${i}.${ext}`;
-        await run(["-ss", S(r.s), "-t", S(r.e - r.s), "-i", input, "-map", "0", "-c", "copy",
-                   "-avoid_negative_ts", "make_zero", part]);
-        parts.push(part);
-        done += r.e - r.s;
-      }
-      out = `/out.${ext}`;
-      if (parts.length === 1) {
-        await ff.rename(parts[0]!, out);
-      } else {
-        await ff.writeFile("/list.txt", parts.map((p) => `file '${p}'`).join("\n"));
-        await run(["-f", "concat", "-safe", "0", "-i", "/list.txt", "-c", "copy", out]);
-        for (const p of parts) await ff.deleteFile(p);
-      }
-      mime = opts.hasVideo ? `video/${ext === "mov" ? "quicktime" : ext}` : `audio/${ext}`;
+    let input: string;
+    if (src.kind === "file") {
+      await ff.mountFiles(dir, [src.file]);
+      cleanup.push(() => ff.unmount(dir));
+      input = `${dir}/${src.file.name}`;
     } else {
-      const video = opts.mode === "video-encode" && opts.hasVideo;
-      ext = opts.mode === "mp3" ? "mp3" : opts.mode === "m4a" ? "m4a" : "mp4";
-      mime = opts.mode === "mp3" ? "audio/mpeg" : opts.mode === "m4a" ? "audio/mp4" : "video/mp4";
-      const inputs = ranges.flatMap((r) => ["-ss", S(r.s), "-t", S(r.e - r.s), "-i", input]);
-      const pads = ranges.map((_, i) => (video ? `[${i}:v:0][${i}:a:0]` : `[${i}:a:0]`)).join("");
-      const graph = `${pads}concat=n=${ranges.length}:v=${video ? 1 : 0}:a=1${video ? "[v][a]" : "[a]"}`;
-      const codecs = opts.mode === "mp3" ? ["-c:a", "libmp3lame", "-q:a", "2"]
-        : video ? ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
-                   "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
-        : ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"];
-      out = `/out.${ext}`;
-      await run([...inputs, "-filter_complex", graph,
-                 ...(video ? ["-map", "[v]", "-map", "[a]"] : ["-map", "[a]"]), ...codecs, out]);
+      progress("Checking the media URL…");
+      const pr = await probeUrl(src.url).catch((e: Error) => {
+        throw new Error(`Couldn't reach the media (${e.message}) — the host must allow CORS; or open it as a local file.`);
+      });
+      const name = src.name.replace(/[^\w.-]+/g, "_") || "input";
+      if (pr.ranges && pr.size) {
+        // Lazy: only the bytes ffmpeg reads are fetched.
+        await ff.mountUrl(dir, name, src.url, pr.size);
+        cleanup.push(() => ff.unmount(dir));
+        input = `${dir}/${name}`;
+        o.log?.(`[textcut] ${src.url}: Range requests supported — reading only what's needed of ${fmtBytes(pr.size)}`);
+      } else {
+        o.log?.(`[textcut] ${src.url}: no Range support — downloading the whole file`);
+        const bytes = await downloadAll(src.url, pr.size, progress);
+        input = `/${name}`;
+        await ff.writeFile(input, bytes);
+        cleanup.push(() => ff.deleteFile(input));
+      }
     }
-    const data = await ff.readFile(out);
-    await ff.deleteFile(out);
+
+    const job = buildJob({ ...o.spec, input, output: `/out${runSeq}.${o.ext}`, tmp: `/tmp${runSeq}_` });
+    for (const n of job.notes) o.log?.(`[textcut] ${n}`);
+    for (const f of job.files) await ff.writeFile(f.path, f.text);
+    cleanup.push(async () => {
+      for (const p of [...job.temps, ...job.files.map((f) => f.path)]) await ff.deleteFile(p).catch(() => {});
+    });
+
+    let step = 0;
+    const nSteps = job.steps.length;
+    ff.on = {
+      log: o.log,
+      net: (s) => { net = s; show(); },
+      progress: ({ time }) => {
+        // `time`: microseconds of output written by the current step.
+        const f = nSteps > 1 ? (step + Math.min(1, time / 1e6 / (job.duration / nSteps))) / nSteps
+                             : Math.min(1, Math.max(0, time / 1e6 / job.duration));
+        status = `Rendering… ${Math.round(f * 100)}%`;
+        show(f);
+      },
+    };
+    for (; step < nSteps; step++) {
+      status = nSteps > 1 ? `Step ${step + 1}/${nSteps}…` : "Rendering…";
+      show(step / nSteps);
+      const code = await ff.exec(job.steps[step]!);
+      if (code !== 0) throw new Error(`ffmpeg exited with code ${code} — see the log`);
+    }
+    const data = await ff.readFile(job.output);
+    await ff.deleteFile(job.output).catch(() => {});
     progress("Done", 1);
-    return { blob: new Blob([data as BlobPart], { type: mime }), ext };
+    return { blob: new Blob([data as BlobPart], { type: MIME[o.ext] ?? "application/octet-stream" }), ext: o.ext, net };
   } finally {
-    ff.off("progress", onProgress);
-    ff.off("log", logger);
-    for (const c of cleanup) await c().catch(() => {});
+    signal?.removeEventListener("abort", onAbort);
+    ff.on = {};
+    if (!ff.dead) for (const c of cleanup.reverse()) await c().catch(() => {});
   }
+}
+
+async function downloadAll(url: string, size: number | null, progress: Progress): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`Media download failed: HTTP ${res.status}`);
+  const total = size ?? (Number(res.headers.get("Content-Length")) || 0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    progress(`Downloading media… ${fmtBytes(got)}${total ? ` of ${fmtBytes(total)}` : ""}`, total ? got / total : undefined);
+  }
+  return new Uint8Array(await new Blob(chunks as BlobPart[]).arrayBuffer());
 }

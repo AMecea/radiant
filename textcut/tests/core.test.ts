@@ -129,8 +129,11 @@ describe("formats", () => {
   it("clip yaml / ffmpeg / csv / srt", () => {
     expect(formatClips(clips, "clip-yaml")).toContain("id: reel2");
     expect(formatClips([clips[0]!], "ffmpeg")).toContain("-ss 1.000 -t 1.500 -i");
-    expect(formatClips(clips, "ffmpeg")).toContain('-ss 10.000 -t 2.000 -i "INPUT.mp4" -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]"');
-    expect(formatClips(clips, "ffmpeg", { hasVideo: false, output: "a.m4a" })).toContain('"[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -c:a aac "a.m4a"');
+    const ff = formatClips(clips, "ffmpeg");
+    expect(ff).toContain("-ss 10.000 -t 2.000 -i INPUT.mp4");
+    expect(ff).toContain("[0:v:0][a0][1:v:0][a1]concat=n=2:v=1:a=1[vc][ac]");
+    expect(formatClips(clips, "ffmpeg", { hasVideo: false, output: "a.m4a", fade: 0 }))
+      .toContain("-filter_complex '[0:a:0][1:a:0]concat=n=2:v=0:a=1[ac]'");
     expect(formatClips(clips, "csv")).toContain('"say ""x"""');
     expect(formatClips(clips, "srt")).toContain("00:00:01,500 --> 00:00:03,500");
   });
