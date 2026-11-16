@@ -5,7 +5,8 @@ import {
 } from "../src/core/edits";
 import { buildJob, jobToShell, outputExt, shQuote } from "../src/core/ffjob";
 import { cropRect, normalizeOps, opFilters } from "../src/core/ops";
-import { buildLink, readLink } from "../src/core/link";
+import { buildLink, packPreset, readLink, unpackPreset } from "../src/core/link";
+import { radiantPlan } from "../src/core/radiant";
 
 const mk = (spec: Array<[number, number, string]>): Transcript =>
   parseTranscript({ segments: [{ words: spec.map(([start, end, word]) => ({ start, end, word })) }] });
@@ -170,5 +171,63 @@ describe("ffmpeg jobs", () => {
 
   it("rejects an empty cut", () => {
     expect(() => buildJob({ ...base, mode: "exact", ranges: [] })).toThrow(/Nothing/);
+  });
+});
+
+describe("variables, radiant plans, shared exports", () => {
+  const url = "https://x.org/my talk.mp4";
+  const spec = { input: url, output: "talk_cut.mp4", hasVideo: true, mode: "exact" as const,
+                 ranges: [{ s: 30, e: 40 }, { s: 1, e: 2 }], fade: 0, frame: { width: 1920, height: 1080 },
+                 ops: normalizeOps([{ id: "crop", on: true, p: { aspect: "9:16" } }, { id: "loudnorm", on: true, p: {} }]) };
+
+  it("shell: literal URL by default, $INPUT/$OUTPUT with the URL as default when asked", () => {
+    const job = buildJob(spec);
+    expect(jobToShell(job)).toContain("-i 'https://x.org/my talk.mp4'");
+    const sh = jobToShell(job, { input: url, output: "talk_cut.mp4" });
+    expect(sh).toMatch(/^INPUT=\$\{INPUT:-'https:\/\/x\.org\/my talk\.mp4'\}\nOUTPUT=\$\{OUTPUT:-talk_cut\.mp4\}\n/);
+    expect(sh).toContain('-i "$INPUT"');
+    expect(sh).toMatch(/"\$OUTPUT"$/);
+    expect(sh).not.toContain("x.org/my talk.mp4' \\");
+  });
+
+  it("radiant: one ffmpeg step, seek-only inputs, lengths in the graph", () => {
+    const y = radiantPlan(spec);
+    expect(y).toContain("action: ffmpeg");
+    expect(y).toContain('input: "https://x.org/my talk.mp4"');
+    expect(y).toContain("start: 30.000");
+    expect(y).toContain('- { file: "https://x.org/my talk.mp4", start: 1.000 }');
+    expect(y).toContain("[0:v:0]trim=duration=10.000,setpts=PTS-STARTPTS[v0];");
+    expect(y).toContain("[1:a:0]atrim=duration=1.000,asetpts=PTS-STARTPTS[a1];");
+    expect(y).toContain("[vc]crop=608:1080:656:0[vout];");
+    expect(y).toContain('map: ["[vout]", "[aout]"]');
+    expect(y).toContain('extra_args: ["-ar", "48000"]');
+    expect(y).not.toContain("vars:");
+  });
+
+  it("radiant: variables declared with the URL as default", () => {
+    const y = radiantPlan(spec, { vars: true, name: "t" });
+    expect(y).toContain('vars:\n  input: "https://x.org/my talk.mp4"\n  output: "talk_cut.mp4"');
+    expect(y).toContain('input: "${vars.input}"');
+    expect(y).toContain('output: "${vars.output}"');
+    expect(y).toContain('{ file: "${vars.input}", start: 1.000 }');
+  });
+
+  it("radiant: a one-pass cut keeps relative trims; audio-only drops faststart", () => {
+    const y = radiantPlan({ ...spec, ops: [], output: "a.mp3", mode: "audio", audioCodec: "mp3",
+                            ranges: [{ s: 10, e: 12 }, { s: 12.5, e: 15 }] });
+    expect(y).toContain("start: 10.000");
+    expect(y).not.toContain("inputs:");
+    expect(y).toContain("[0:a:0]atrim=start=2.500:end=5.000");
+    expect(y).toContain("acodec: libmp3lame");
+    expect(y).toContain("faststart: false");
+    expect(y).not.toContain("vcodec");
+  });
+
+  it("packs an export preset into the link", async () => {
+    const x = await packPreset({ v: 1, r: [[1, 2], [5, 9.5]], m: "exact", o: [{ id: "crop", p: { aspect: "1:1" } }], f: 1, n: "reel" });
+    const link = buildLink("https://h/textcut/", { media: url, x });
+    const back = await unpackPreset(readLink({ search: "", hash: link.slice(link.indexOf("#")) }).x!);
+    expect(back).toMatchObject({ r: [[1, 2], [5, 9.5]], m: "exact", n: "reel" });
+    expect(await unpackPreset("garbage")).toBeNull();
   });
 });

@@ -6,7 +6,7 @@ import { CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "
 import {
   hasEdits, packEdits, rangeAt, removedRanges, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
-import { buildLink, packJson, type LinkParams } from "../core/link";
+import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
 import { copyText, h, isTyping, modal, toast } from "./dom";
 import { loadJson, loadSettings, saveJson, saveSettings, type Settings } from "./settings";
 import { mediaFromFile, mediaFromUrl, stemOf, type LoadedTranscript, type MediaSource } from "./sources";
@@ -785,6 +785,7 @@ export class Editor {
     }
     const t = at ?? sel?.s;
     if (t != null) this.seek(t);
+    if (this.init.link.x) void this.openSharedExport(this.init.link.x);
   }
 
   // ======================================================== sharing
@@ -1032,7 +1033,8 @@ export class Editor {
   }
 
   /** Export ranges (clips / a selection): the text edits inside them are applied. */
-  private exportRanges(heading: string, ranges: readonly Clip[], summary?: string, applyEdits = true): void {
+  private exportRanges(heading: string, ranges: readonly Clip[], summary?: string, applyEdits = true,
+                       preset: ExportPreset | null = null): void {
     const list = applyEdits ? this.applyEdits(ranges) : [...ranges];
     if (!list.length) { toast("Nothing left to export — it's all been cut", "err"); return; }
     const dur = (rs: readonly TimeRange[]) => rs.reduce((n, r) => n + (r.e - r.s), 0);
@@ -1047,7 +1049,38 @@ export class Editor {
       video: v,
       stem: stemOf(this.media?.name ?? this.title),
       settings: this.settings,
-      format: (k, c) => this.formatClips(k, c),
+      preset,
+      shareLink: async (x) => {
+        const { p, warnings } = await this.linkParams(false);
+        p.x = await packPreset(x);
+        p.at = x.r[0]?.[0];
+        return { link: buildLink(this.pageBase(), p), warnings };
+      },
+    });
+  }
+
+  /** A link with `x=`: open the export it describes, once the media's size is known. */
+  private async openSharedExport(x: string): Promise<void> {
+    const preset = await unpackPreset(x);
+    if (!preset) { toast("The export in this link couldn't be read", "err"); return; }
+    if (this.media) await this.metadataReady(10_000);
+    const ranges = preset.r.map(([s, e]) => ({ s, e, text: this.textIn({ s, e }) }));
+    this.exportRanges(preset.h ?? "Shared export", ranges, "Shared with a link.", false, preset);
+  }
+
+  private metadataReady(ms: number): Promise<void> {
+    const v = this.video;
+    return new Promise((resolve) => {
+      if (v.readyState >= 1 || v.error) return resolve();
+      const done = () => {
+        clearTimeout(timer);
+        v.removeEventListener("loadedmetadata", done);
+        v.removeEventListener("error", done);
+        setTimeout(resolve, 0); // after setMedia's own handler has read the size
+      };
+      const timer = setTimeout(done, ms);
+      v.addEventListener("loadedmetadata", done);
+      v.addEventListener("error", done);
     });
   }
 

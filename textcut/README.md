@@ -17,14 +17,27 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   the edit while playing. Undo/redo with `⌘Z` / `⇧⌘Z`. Edits are saved per transcript
   and go into shared links. They also apply to clips and selections you export.
 - **Clips**: collect selections (`A`), or split a selection at its pauses (`S`, "+ Clips
-  w/o pauses"). Reorder, play them back to back, and copy them as a radiant `trim` step,
-  radiant `clip` steps, an ffmpeg command, CSV, JSON or SRT.
+  w/o pauses"). Reorder, play them back to back, and copy them as a radiant plan (an
+  `ffmpeg` step), a radiant `trim` step, radiant `clip` steps, an ffmpeg command, CSV,
+  JSON or SRT.
 - **Export** the edit, the clips or a selection, with optional **processing**: *crop* to
   9:16 / 1:1 / 4:5… (drag the frame on a preview), *resize*, *reduce noise*, *normalise
   loudness*. *Smooth joins* adds 10 ms audio fades at every cut, so word-level cuts
   don't click. The dialog always shows the **ffmpeg command** for the current choices
-  (copy it, or download it as a `.sh`). It is the same job the browser runs, so a long
-  render can go to a native ffmpeg instead. Formats:
+  (copy it, or download it as a `.sh`) and the **radiant plan**: one `ffmpeg` step with
+  the same filter graph (copy it, or download it as a `.yaml`). Both describe the same
+  job the browser runs, so a long render can go to a native ffmpeg or to radiant instead.
+  - The input is the media URL, written into the command and the plan by default. Tick
+    **Variables** to get `$INPUT` / `$OUTPUT` (`INPUT=other.mp4 sh cut.sh`) and radiant
+    `${vars.input}` / `${vars.output}` (`--vars input=…`) instead. The URL and file name
+    stay as their defaults.
+  - **🔗 Copy link** puts the whole export in a link: the ranges (clips/reels, or the
+    edit), the format, the processing and the file name. Whoever opens it lands in the
+    same export dialog. They can run it in their browser or copy the command or plan,
+    and their own saved settings stay untouched. Hosted media goes in the link. A local
+    file can't, so the recipient is asked for it.
+
+  Formats:
   - **WAV**: instant. A PCM `.wav` source is cut straight from its bytes, so a 1-hour
     master is not decoded. Other formats are decoded with WebAudio first.
   - **Video / MP3 / M4A** via [ffmpeg.wasm](https://ffmpegwasm.netlify.app/), downloaded on
@@ -68,6 +81,7 @@ host's server. `?…` works too.
 | `clips` | clip list: `10-20.5,30-41` |
 | `dw`    | deleted words, by index: `3-5,10` |
 | `dg`    | deleted pauses, by index of the word before them + 1 (`0` = leading silence): `0,14` |
+| `x`     | an export to open on arrival: ranges, format, processing, file name (compressed JSON) |
 
 ```
 https://<host>/textcut/#media=https://x.org/talk.mp4&words=https://x.org/talk.words.json&sel=1:23.5-1:31

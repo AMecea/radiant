@@ -66,7 +66,7 @@ export function buildJob(spec: CutSpec): FfJob {
   const ranges = spec.ranges.filter((r) => r.e - r.s > 0.001);
   if (!ranges.length) throw new Error("Nothing to export");
   const duration = ranges.reduce((n, r) => n + (r.e - r.s), 0);
-  return spec.mode === "copy" ? copyJob(spec, ranges, duration) : encodeJob(spec, ranges, duration);
+  return spec.mode === "copy" ? copyJob(spec, ranges, duration) : encodeJob(spec);
 }
 
 function copyJob(spec: CutSpec, ranges: readonly TimeRange[], duration: number): FfJob {
@@ -97,12 +97,41 @@ function copyJob(spec: CutSpec, ranges: readonly TimeRange[], duration: number):
   };
 }
 
-function encodeJob(spec: CutSpec, ranges: readonly TimeRange[], duration: number): FfJob {
+/**
+ * A re-encoding cut, before it's spelled as argv: inputs (all of `spec.input`,
+ * each seeked), the filter graph, what to map, and the encoder settings. Both the
+ * argv (browser + shell) and the radiant `ffmpeg` step are rendered from this.
+ */
+export interface EncodePlan {
+  /** one entry per `-i spec.input`: input seek, and input duration when known */
+  inputs: Array<{ ss: number; t?: number }>;
+  graph: string[];
+  /** -map targets: "[label]" for graph outputs, "0:a:0" for raw streams */
+  maps: string[];
+  video: { codec: string; preset: string; crf: number; pixFmt: string } | null;
+  audio: { codec: string; bitrate?: string };
+  /** extra output options contributed by ops (e.g. -ar 48000) */
+  extra: string[];
+  faststart: boolean;
+  duration: number;
+  notes: string[];
+}
+
+/**
+ * Plan a re-encoding cut. With `seekOnly`, inputs carry just a seek (no input-side
+ * `-t`), and every segment's length comes from trim filters instead — the shape
+ * radiant's `ffmpeg` step can express (`start` + `inputs[].start`).
+ */
+export function encodePlan(spec: CutSpec, seekOnly = false): EncodePlan {
+  const ranges = spec.ranges.filter((r) => r.e - r.s > 0.001);
+  if (!ranges.length) throw new Error("Nothing to export");
+  const duration = ranges.reduce((n, r) => n + (r.e - r.s), 0);
   const notes: string[] = [];
-  const video = spec.mode === "exact" && spec.hasVideo;
+  const mode = spec.mode === "copy" ? (spec.hasVideo ? "exact" : "audio") : spec.mode;
+  const video = mode === "exact" && spec.hasVideo;
   const n = ranges.length;
   const fade = n > 1 ? Math.max(0, spec.fade ?? 0) : 0;
-  const inputs: string[] = [];
+  const inputs: EncodePlan["inputs"] = [];
   const graph: string[] = [];
   const vSeg: string[] = [], aSeg: string[] = [];
 
@@ -117,7 +146,7 @@ function encodeJob(spec: CutSpec, ranges: readonly TimeRange[], duration: number
   const t0 = ranges[0]!.s, t1 = ranges[n - 1]!.e;
   const onePass = n > 1 && isChronological(ranges) && (n > 12 || duration >= 0.5 * (t1 - t0));
   if (onePass) {
-    inputs.push("-ss", S(t0), "-t", S(t1 - t0), "-i", spec.input);
+    inputs.push(seekOnly ? { ss: t0 } : { ss: t0, t: t1 - t0 });
     ranges.forEach((r, i) => {
       const a = S(r.s - t0), b = S(r.e - t0);
       if (video) {
@@ -130,9 +159,19 @@ function encodeJob(spec: CutSpec, ranges: readonly TimeRange[], duration: number
   } else {
     if (n > 12) notes.push(`${n} separate inputs: fine for a native ffmpeg, heavy for the browser.`);
     ranges.forEach((r, i) => {
-      inputs.push("-ss", S(r.s), "-t", S(r.e - r.s), "-i", spec.input);
+      const d = r.e - r.s;
+      inputs.push(seekOnly ? { ss: r.s } : { ss: r.s, t: d });
+      if (seekOnly) {
+        if (video) {
+          graph.push(`[${i}:v:0]trim=duration=${S(d)},setpts=PTS-STARTPTS[v${i}]`);
+          vSeg.push(`[v${i}]`);
+        }
+        graph.push(`[${i}:a:0]atrim=duration=${S(d)},asetpts=PTS-STARTPTS${afade(d)}[a${i}]`);
+        aSeg.push(`[a${i}]`);
+        return;
+      }
       if (video) vSeg.push(`[${i}:v:0]`);
-      const f = afade(r.e - r.s);
+      const f = afade(d);
       if (f) {
         graph.push(`[${i}:a:0]${f.slice(1)}[a${i}]`);
         aSeg.push(`[a${i}]`);
@@ -160,23 +199,30 @@ function encodeJob(spec: CutSpec, ranges: readonly TimeRange[], duration: number
 
   // Raw input pads are mapped as "0:v:0", filter outputs as "[label]".
   const mapOf = (l: string) => (/^\[\d+:/.test(l) ? l.slice(1, -1) : l);
-  const args = [...inputs];
-  if (graph.length) args.push("-filter_complex", graph.join(";\n"));
-  if (video) args.push("-map", mapOf(vOut));
-  args.push("-map", mapOf(aOut));
+  const codec = mode === "audio" ? spec.audioCodec ?? "aac" : "aac";
+  return {
+    inputs, graph,
+    maps: [...(video ? [mapOf(vOut)] : []), mapOf(aOut)],
+    video: video ? { codec: "libx264", preset: spec.preset ?? "veryfast", crf: spec.crf ?? 21, pixFmt: "yuv420p" } : null,
+    audio: codec === "mp3" ? { codec: "libmp3lame", bitrate: "192k" }
+         : codec === "pcm" ? { codec: "pcm_s16le" } : { codec: "aac", bitrate: "192k" },
+    extra: ops.out,
+    faststart: /\.(mp4|m4a|mov|m4v)$/i.test(spec.output),
+    duration, notes,
+  };
+}
 
-  const codec = spec.mode === "audio" ? spec.audioCodec ?? "aac" : "aac";
-  if (video) {
-    args.push("-c:v", "libx264", "-preset", spec.preset ?? "veryfast", "-crf", String(spec.crf ?? 21), "-pix_fmt", "yuv420p");
-  }
-  if (codec === "mp3") args.push("-c:a", "libmp3lame", "-q:a", "2");
-  else if (codec === "pcm") args.push("-c:a", "pcm_s16le");
-  else args.push("-c:a", "aac", "-b:a", "192k");
-  args.push(...ops.out);
-  if (/\.(mp4|m4a|mov|m4v)$/i.test(spec.output)) args.push("-movflags", "+faststart");
+function encodeJob(spec: CutSpec): FfJob {
+  const p = encodePlan(spec);
+  const args: string[] = [];
+  for (const i of p.inputs) args.push("-ss", S(i.ss), ...(i.t != null ? ["-t", S(i.t)] : []), "-i", spec.input);
+  if (p.graph.length) args.push("-filter_complex", p.graph.join(";\n"));
+  for (const m of p.maps) args.push("-map", m);
+  if (p.video) args.push("-c:v", p.video.codec, "-preset", p.video.preset, "-crf", String(p.video.crf), "-pix_fmt", p.video.pixFmt);
+  args.push("-c:a", p.audio.codec, ...(p.audio.bitrate ? ["-b:a", p.audio.bitrate] : []), ...p.extra);
+  if (p.faststart) args.push("-movflags", "+faststart");
   args.push(spec.output);
-
-  return { steps: [args], files: [], temps: [], output: spec.output, duration, notes };
+  return { steps: [args], files: [], temps: [], output: spec.output, duration: p.duration, notes: p.notes };
 }
 
 // ------------------------------------------------------------ shell rendering
@@ -187,7 +233,7 @@ export function shQuote(s: string): string {
 }
 
 /** Break an argv over lines at the natural places: inputs, graph, maps, codecs, output. */
-function fmtCommand(args: readonly string[]): string {
+function fmtCommand(args: readonly string[], sub: (a: string) => string | null = () => null): string {
   const lines: string[][] = [["ffmpeg", "-hide_banner"]];
   let map = false, codec = false;
   args.forEach((a, i) => {
@@ -197,18 +243,32 @@ function fmtCommand(args: readonly string[]): string {
     map ||= a === "-map";
     codec ||= isCodec;
     if (brk) lines.push([]);
-    lines[lines.length - 1]!.push(shQuote(a));
+    lines[lines.length - 1]!.push(sub(a) ?? shQuote(a));
   });
   return lines.map((l) => l.join(" ")).join(" \\\n  ");
 }
 
-/** The job as a shell script a native ffmpeg can run. */
-export function jobToShell(job: FfJob): string {
+export interface ShellVars {
+  /** the literal input / output in the job, replaced by "$INPUT" / "$OUTPUT" */
+  input: string;
+  output: string;
+}
+
+/**
+ * The job as a shell script a native ffmpeg can run. With `vars`, the input and
+ * output become $INPUT / $OUTPUT, defaulting to the original values:
+ * `INPUT=other.mp4 sh cut.sh`.
+ */
+export function jobToShell(job: FfJob, vars?: ShellVars): string {
   const out: string[] = [];
   const multi = job.steps.length > 1 || job.files.length > 0;
   if (multi) out.push("set -e");
+  if (vars) {
+    out.push(`INPUT=\${INPUT:-${shQuote(vars.input)}}`, `OUTPUT=\${OUTPUT:-${shQuote(vars.output)}}`);
+  }
+  const sub = (a: string) => (vars && a === vars.input ? '"$INPUT"' : vars && a === vars.output ? '"$OUTPUT"' : null);
   for (const f of job.files) out.push(`cat > ${shQuote(f.path)} <<'EOF'\n${f.text.replace(/\n$/, "")}\nEOF`);
-  for (const s of job.steps) out.push(fmtCommand(s));
+  for (const s of job.steps) out.push(fmtCommand(s, sub));
   if (job.temps.length) out.push(`rm -f ${job.temps.map(shQuote).join(" ")}`);
   return out.join("\n");
 }

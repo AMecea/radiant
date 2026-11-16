@@ -1,12 +1,14 @@
 /**
  * The export dialog: pick a format and processing (crop, resize, audio filters),
- * then either run it in the browser or copy the equivalent ffmpeg command.
- * The command and the in-browser run come from the same job (core/ffjob.ts).
+ * then run it in the browser, copy the equivalent ffmpeg command or radiant plan,
+ * or copy a link that opens this same export for someone else.
+ * The command, the plan and the in-browser run come from the same job (core/ffjob.ts).
  */
 
-import type { Clip, ClipFormat } from "../core/formats";
-import { CLIP_FORMATS } from "../core/formats";
+import type { Clip } from "../core/formats";
 import { buildJob, jobToShell, outputExt, type AudioCodec, type CutMode, type CutSpec } from "../core/ffjob";
+import type { ExportPreset } from "../core/link";
+import { radiantPlan } from "../core/radiant";
 import { cropRect, normalizeOps, opDef, OPS, type Field, type Frame, type OpState } from "../core/ops";
 import { fmtDur } from "../core/time";
 import { copyText, download, fmtBytes, h, modal, toast } from "./dom";
@@ -26,8 +28,10 @@ export interface ExportContext {
   video: HTMLVideoElement;
   stem: string;
   settings: Settings;
-  /** other text formats (radiant steps) for the same ranges */
-  format(kind: ClipFormat, clips: readonly Clip[]): string;
+  /** opened from a shared link: its format & processing (the user's settings stay untouched) */
+  preset?: ExportPreset | null;
+  /** a link that opens the editor on this export */
+  shareLink(p: ExportPreset): Promise<{ link: string; warnings: string[] }>;
 }
 
 type ModeId = "exact" | "copy" | "wav" | "m4a" | "mp3";
@@ -47,7 +51,13 @@ export function openExportDialog(ctx: ExportContext): void {
   const ranges = ctx.ranges.map((c) => ({ s: c.s, e: c.e }));
   const total = ranges.reduce((n, r) => n + (r.e - r.s), 0);
   const srcExt = (media?.name.match(/\.([a-z0-9]+)$/i)?.[1] ?? "").toLowerCase();
-  s.ops = normalizeOps(s.ops);
+  const preset = ctx.preset ?? null;
+  // Working state: from the shared link, or the user's last choices (saved back only then).
+  const st = {
+    ops: preset ? normalizeOps((preset.o ?? []).map((o) => ({ id: o.id, on: true, p: o.p }))) : normalizeOps(s.ops),
+    smooth: preset ? preset.f !== 0 : s.smoothJoins,
+    vars: preset ? preset.vars === 1 : s.useVars,
+  };
 
   const modes: ModeDef[] = [
     ...(hasVideo || !media ? [{
@@ -66,14 +76,18 @@ export function openExportDialog(ctx: ExportContext): void {
     { id: "m4a", label: "M4A (AAC) audio", cut: "audio", codec: "aac", video: false, audio: true, note: "re-encoded" },
     { id: "mp3", label: "MP3 audio", cut: "audio", codec: "mp3", video: false, audio: true, note: "re-encoded" },
   ];
-  let mode: ModeDef = modes.find((m) => m.id === s.exportMode) ?? modes[0]!;
-  const save = () => saveSettings(s);
+  let mode: ModeDef = modes.find((m) => m.id === (preset?.m ?? s.exportMode)) ?? modes[0]!;
+  const save = () => {
+    if (preset) return;
+    Object.assign(s, { exportMode: mode.id, ops: st.ops, smoothJoins: st.smooth, useVars: st.vars });
+    saveSettings(s);
+  };
 
   // ---------------------------------------------------------------- format
   const modeList = h("div", { class: "choices" }, ...modes.map((m) => {
     const input = h("input", {
       type: "radio", name: "fmt", value: m.id, checked: m.id === mode.id,
-      onchange: () => { mode = m; s.exportMode = m.id; save(); renderOps(); update(); },
+      onchange: () => { mode = m; save(); renderOps(); update(); },
     });
     return h("label", { class: "choice" }, input, h("span", {}, h("strong", {}, m.label), h("small", {}, m.note)));
   }));
@@ -81,8 +95,8 @@ export function openExportDialog(ctx: ExportContext): void {
   // ---------------------------------------------------------------- processing
   const opsBox = h("div", { class: "ops" });
   const joins = h("input", {
-    type: "checkbox", checked: s.smoothJoins,
-    onchange: () => { s.smoothJoins = joins.checked; save(); update(); },
+    type: "checkbox", checked: st.smooth,
+    onchange: () => { st.smooth = joins.checked; save(); update(); },
   });
 
   function renderOps(): void {
@@ -93,22 +107,22 @@ export function openExportDialog(ctx: ExportContext): void {
       return;
     }
     for (const d of usable) {
-      const st = s.ops.find((o) => o.id === d.id)!;
-      const body = h("div", { class: "op-body", hidden: !st.on });
+      const op = st.ops.find((o) => o.id === d.id)!;
+      const body = h("div", { class: "op-body", hidden: !op.on });
       const on = h("input", {
-        type: "checkbox", checked: st.on,
-        onchange: () => { st.on = on.checked; body.hidden = !st.on; save(); update(); },
+        type: "checkbox", checked: op.on,
+        onchange: () => { op.on = on.checked; body.hidden = !op.on; save(); update(); },
       });
       const sync: Array<() => void> = [];
       const changed = () => { save(); sync.forEach((f) => f()); update(); };
       if (d.id === "crop" && ctx.frame) {
-        const prev = cropPreview(ctx.video, ctx.frame, st, changed);
+        const prev = cropPreview(ctx.video, ctx.frame, op, changed);
         sync.push(prev.sync);
         body.append(prev.el);
       }
       const grid = h("div", { class: "op-fields" });
       for (const f of d.fields) {
-        const r = fieldInput(f, st, changed);
+        const r = fieldInput(f, op, changed);
         sync.push(r.sync);
         grid.append(r.el);
       }
@@ -119,52 +133,82 @@ export function openExportDialog(ctx: ExportContext): void {
     }
   }
 
-  // ---------------------------------------------------------------- command
-  const name = h("input", { type: "text", value: `${ctx.stem}_cut`, "aria-label": "File name", oninput: () => update() });
+  // ---------------------------------------------------------------- command / plan
+  const name = h("input", { type: "text", value: preset?.n ?? `${ctx.stem}_cut`, "aria-label": "File name", oninput: () => update() });
   const cmdPre = h("pre", { class: "mono cmd" });
+  const yamlPre = h("pre", { class: "mono cmd" });
   const notes = h("div", {});
-  const yamlPre = h("pre", { class: "mono" });
+  const varsChk = h("input", {
+    type: "checkbox", checked: st.vars,
+    onchange: () => { st.vars = varsChk.checked; save(); update(); },
+  });
 
   const specOf = (): Omit<CutSpec, "input" | "output" | "tmp"> => ({
     ranges, mode: mode.cut, audioCodec: mode.codec, hasVideo, frame: ctx.frame,
-    ops: s.ops.filter((o) => {
+    ops: st.ops.filter((o) => {
       const d = opDef(o.id);
       return d && (d.stream === "video" ? mode.video : mode.audio);
     }),
-    fade: s.smoothJoins ? 0.01 : 0,
+    fade: st.smooth ? 0.01 : 0,
   });
   const extOf = () => outputExt(mode.cut, media?.name ?? ".mp4", hasVideo || !media, mode.codec);
-  const audioOpsOn = () => s.ops.some((o) => o.on && opDef(o.id)?.stream === "audio");
+  const audioOpsOn = () => st.ops.some((o) => o.on && opDef(o.id)?.stream === "audio");
+  const fileName = () => `${name.value || ctx.stem + "_cut"}.${extOf()}`;
 
-  let script = "";
+  let script = "", plan = "";
   function update(): void {
     const input = media?.kind === "url" ? media.url : media?.name ?? `${ctx.stem}.mp4`;
+    const output = fileName();
+    const spec = { ...specOf(), input, output };
     try {
-      const job = buildJob({ ...specOf(), input, output: `${name.value || ctx.stem + "_cut"}.${extOf()}` });
-      script = jobToShell(job);
+      const job = buildJob(spec);
+      script = jobToShell(job, st.vars ? { input, output } : undefined);
       notes.replaceChildren(...job.notes.map((n) => h("p", { class: "notice" }, n)));
+      plan = radiantPlan(spec, {
+        vars: st.vars, name: `textcut_${ctx.stem}`.replace(/[^\w-]+/g, "_"),
+        comment: `textcut — ${ctx.heading}: ${ranges.length} range${ranges.length === 1 ? "" : "s"}, ${fmtDur(total)}`,
+      });
     } catch (e) {
-      script = `# ${(e as Error).message}`;
+      script = plan = `# ${(e as Error).message}`;
     }
     cmdPre.textContent = script;
+    yamlPre.textContent = plan;
   }
-  yamlPre.textContent = ctx.format("trim-yaml", ctx.ranges);
 
-  const cmd = h("div", { class: "snippet" },
-    h("div", { class: "row" }, h("strong", {}, "ffmpeg command"), h("span", { class: "muted" }, "— the same job the browser runs"),
-      h("span", { class: "spacer" }),
-      h("button", { onclick: () => void copyText(script, "Command") }, "Copy"),
-      h("button", {
-        title: "Download as a shell script",
-        onclick: () => download(`#!/bin/sh\n# textcut — ${ctx.heading}: ${ranges.length} ranges, ${fmtDur(total)}\n${script}\n`,
-          `${name.value || ctx.stem}.sh`, "text/x-shellscript"),
-      }, ".sh")),
-    cmdPre,
-    h("details", {},
-      h("summary", {}, CLIP_FORMATS.find((f) => f.id === "trim-yaml")!.label),
-      h("div", { class: "row" }, h("span", { class: "spacer" }),
-        h("button", { onclick: () => void copyText(yamlPre.textContent ?? "", "radiant step") }, "Copy")),
-      yamlPre));
+  const stem = () => name.value || ctx.stem + "_cut";
+  const snippet = (title: string, note: string, pre: HTMLElement, copy: () => string, file: () => [string, string, string]) =>
+    h("div", { class: "snippet" },
+      h("div", { class: "row" }, h("strong", {}, title), h("span", { class: "muted" }, note), h("span", { class: "spacer" }),
+        h("button", { onclick: () => void copyText(copy(), title) }, "Copy"),
+        h("button", { title: "Download", onclick: () => { const [text, fname, type] = file(); download(text, fname, type); } },
+          file()[1].replace(/^.*\./, "."))),
+      pre);
+  const cmd = h("div", {},
+    h("label", { class: "chk" }, varsChk, "Variables",
+      h("small", { class: "muted" }, " — $INPUT / $OUTPUT and radiant ${vars.input} / ${vars.output}, defaulting to this URL and name")),
+    snippet("ffmpeg command", "— the same job the browser runs", cmdPre, () => script,
+      () => [`#!/bin/sh\n# textcut — ${ctx.heading}: ${ranges.length} ranges, ${fmtDur(total)}\n${script}\n`, `${stem()}.sh`, "text/x-shellscript"]),
+    snippet("radiant plan", "— an ffmpeg step", yamlPre, () => plan, () => [plan, `${stem()}.yaml`, "application/yaml"]));
+
+  // ---------------------------------------------------------------- link
+  const presetOf = (): ExportPreset => ({
+    v: 1,
+    r: ranges.map((r) => [+r.s.toFixed(3), +r.e.toFixed(3)]),
+    h: ctx.heading,
+    m: mode.id,
+    o: specOf().ops?.filter((o) => o.on).map((o) => ({ id: o.id, p: o.p })),
+    f: st.smooth ? 1 : 0,
+    n: name.value || undefined,
+    vars: st.vars ? 1 : 0,
+  });
+  const linkBtn = h("button", {
+    title: "A link that opens this export — ranges, format and processing — so someone else can run it in their browser or copy the command",
+    onclick: async () => {
+      const { link, warnings } = await ctx.shareLink(presetOf());
+      await copyText(link, "Export link");
+      if (warnings.length) toast(warnings[0]!, "info", 6000);
+    },
+  }, "🔗 Copy link");
 
   // ---------------------------------------------------------------- run
   const bar = h("progress", { max: 1, value: 0, hidden: true });
@@ -177,6 +221,7 @@ export function openExportDialog(ctx: ExportContext): void {
       ctx.summary ? h("span", { class: "muted" }, ` ${ctx.summary}`) : null),
     h("h4", {}, "Format"), modeList,
     h("h4", {}, "Processing"), opsBox,
+    preset ? h("p", { class: "notice" }, "Opened from a shared link: run it here, or copy the command / plan below.") : null,
     ranges.length > 1 ? h("label", { class: "chk" }, joins, "Smooth joins",
       h("small", { class: "muted" }, " — 10 ms audio fades at every cut, against clicks")) : null,
     hasMedia ? h("label", { class: "field" }, "File name", name)
@@ -186,7 +231,7 @@ export function openExportDialog(ctx: ExportContext): void {
 
   const go = h("button", { class: "primary", disabled: !hasMedia }, "Export");
   const stop = h("button", { hidden: true }, "Cancel");
-  const dlg = modal(ctx.heading, body, [stop, go]);
+  const dlg = modal(ctx.heading, body, [linkBtn, h("span", { class: "spacer" }), stop, go]);
   dlg.el.classList.add("wide");
   renderOps();
   update();
@@ -219,7 +264,7 @@ export function openExportDialog(ctx: ExportContext): void {
         ({ blob, ext } = r);
         if (r.net) extra = ` · fetched ${fmtBytes(r.net.fetched)} of ${fmtBytes(r.net.size)} in ${r.net.requests} requests`;
       }
-      const file = `${name.value || ctx.stem + "_cut"}.${ext}`;
+      const file = `${stem()}.${ext}`;
       download(blob, file);
       status.textContent = `Saved ${file} (${fmtBytes(blob.size)}) in ${fmtDur((performance.now() - t0) / 1000)}${extra}`;
       if (!dlg.el.open) toast("Export finished");

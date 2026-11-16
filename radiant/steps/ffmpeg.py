@@ -10,8 +10,33 @@ Two ways to use it:
   track — which is how a ``braw_decode | ffmpeg`` pipe reproduces the ``encode``
   step's behaviour. ffmpeg is always a *sink* (it writes a file, never stdout).
 
+For cuts that need a real filter graph (frame-accurate trims joined with
+``concat``, crops, audio filters — what textcut exports), give ``filter_complex``
+and ``map``; ``inputs`` adds more seeked inputs of the same or other sources.
+``input`` (and ``inputs``) may also be ``http(s)://`` URLs: ffmpeg reads them
+directly, seeking with Range requests.
+
 For anything not exposed here, drop raw flags into ``extra_args``. Every parameter
 is documented at its declaration below.
+
+Example — two ranges of a remote talk, joined, cropped to 9:16:
+
+    - id: reel
+      action: ffmpeg
+      with:
+        input: "${vars.input}"          # a path or an https:// URL
+        output: reel.mp4
+        start: 120                      # input 0: -ss 120 -i …
+        inputs:
+          - { file: "${vars.input}", start: 300 }   # input 1: -ss 300 -i …
+        filter_complex: |
+          [0:v:0]trim=duration=12,setpts=PTS-STARTPTS[v0];
+          [0:a:0]atrim=duration=12,asetpts=PTS-STARTPTS[a0];
+          [1:v:0]trim=duration=8,setpts=PTS-STARTPTS[v1];
+          [1:a:0]atrim=duration=8,asetpts=PTS-STARTPTS[a1];
+          [v0][a0][v1][a1]concat=n=2:v=1:a=1[vc][a];
+          [vc]crop=608:1080:656:0[v]
+        map: ["[v]", "[a]"]
 """
 
 import sys
@@ -20,16 +45,34 @@ from pathlib import Path
 from .base import Output, Param, Step, StepContext
 
 
+def is_url(value) -> bool:
+    """An http(s) URL — ffmpeg reads those itself; they're not local paths."""
+    return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
+
+
+def source_arg(value) -> str:
+    """A path or URL as an ffmpeg input argument (``Path`` would mangle ``https://``)."""
+    return str(value) if is_url(value) else str(Path(value))
+
+
 class FfmpegStep(Step):
     action = "ffmpeg"
     summary = "General-purpose transcode/convert (and a `pipe` sink stage)."
     params = (
-        Param("input", "Source media path. Omit when fed by an upstream pipe stage.",
+        Param("input", "Source media path or http(s) URL. Omit when fed by an upstream pipe stage.",
               type="path", required=True),
         Param("output", "Output filename (standalone only; a pipe passes the path).",
               required=True),
         Param("start", "-ss seek before -i (fast keyframe seek); file input only.",
               type="str"),
+        Param("inputs", "More inputs after `input` (and `audio`), each {file, start?, duration?} "
+                        "→ `[-ss start] [-t duration] -i file`; reference them in "
+                        "`filter_complex` as [1:v], [2:a]…", type="list"),
+        Param("filter_complex", "Raw -filter_complex graph (whitespace/newlines allowed). Pair "
+                                "with `map`; not combinable with vf/scale/include/exclude.",
+              type="str"),
+        Param("map", "List of -map targets, e.g. ['[v]', '[a]'] or ['0:a:0']. When set, the "
+                     "automatic audio-input mapping is skipped.", type="list"),
         Param("end", "-to end time (mutually exclusive with duration).", type="str"),
         Param("duration", "-t, encode only this many seconds (overridden by --preview).",
               type="str"),
@@ -75,6 +118,26 @@ class FfmpegStep(Step):
             return []
         trim = float(params.get("audio_trim", 0.0) or 0.0)
         return (["-ss", f"{trim:.3f}"] if trim > 0 else []) + ["-i", str(audio)]
+
+    def _extra_inputs(self, params: dict, ctx: StepContext) -> list[str]:
+        inputs = params.get("inputs") or []
+        if not isinstance(inputs, list):
+            raise ValueError("'inputs' must be a list of {file, start?, duration?}")
+        args: list = []
+        for i, item in enumerate(inputs):
+            if isinstance(item, str):
+                item = {"file": item}
+            if not isinstance(item, dict) or not item.get("file"):
+                raise ValueError(f"inputs[{i}] needs a 'file'")
+            f = item["file"]
+            if not ctx.dry_run and not is_url(f) and not Path(f).exists():
+                sys.exit(f"Error: input file not found: {f}")
+            if item.get("start") is not None:
+                args += ["-ss", str(item["start"])]
+            if item.get("duration") is not None:
+                args += ["-t", str(item["duration"])]
+            args += ["-i", source_arg(f)]
+        return args
 
     # -- include/exclude cut -------------------------------------------------
 
@@ -135,7 +198,14 @@ class FfmpegStep(Step):
 
         # include/exclude: prepend a select cut to the video filter chain (the
         # matching audio aselect is appended as -af below). Re-encode is required.
+        graph = params.get("filter_complex")
+        maps = params.get("map")
+        if maps is not None and not isinstance(maps, list):
+            raise ValueError("'map' must be a list, e.g. ['[v]', '[a]']")
         cut = self._select_expr(params)
+        if graph and (vf or cut):
+            raise ValueError("'filter_complex' can't be combined with vf/scale/include/exclude — "
+                             "put those filters in the graph")
         if cut:
             if str(vcodec).lower() == "copy":
                 raise ValueError("include/exclude cut needs a re-encode (select); remove 'vcodec: copy'")
@@ -159,7 +229,12 @@ class FfmpegStep(Step):
             end = None
 
         args: list = []
-        if has_audio:
+        if graph:
+            args += ["-filter_complex", str(graph).strip()]
+        if maps:
+            for m in maps:
+                args += ["-map", str(m)]
+        elif has_audio:
             args += ["-map", "0:v", "-map", "1:a"]
 
         # Video
@@ -227,13 +302,13 @@ class FfmpegStep(Step):
     # -- standalone ----------------------------------------------------------
 
     def run(self, params: dict, ctx: StepContext) -> dict:
-        input_path = Path(self.require(params, "input"))
+        input_path = self.require(params, "input")
         output_name = self.require(params, "output")
         out = ctx.out_path(output_name)
         audio = params.get("audio")
 
         if not ctx.dry_run:
-            if not input_path.exists():
+            if not is_url(input_path) and not Path(input_path).exists():
                 sys.exit(f"Error: input file not found: {input_path}")
             if audio and not Path(audio).exists():
                 sys.exit(f"Error: audio file not found: {audio}")
@@ -242,8 +317,9 @@ class FfmpegStep(Step):
         cmd: list = ["ffmpeg", "-y"]
         if start is not None:
             cmd += ["-ss", str(start)]          # before -i: fast (keyframe) seek
-        cmd += ["-i", str(input_path)]
+        cmd += ["-i", source_arg(input_path)]
         cmd += self._audio_input(params)
+        cmd += self._extra_inputs(params, ctx)
         cmd += self._output_args(params, ctx, has_audio=bool(audio))
         cmd += [str(out)]
 
@@ -272,12 +348,13 @@ class FfmpegStep(Step):
                 cmd += ["-i", "pipe:0"]
         else:
             # First stage → behave like a normal file input.
-            input_path = Path(self.require(params, "input"))
+            input_path = self.require(params, "input")
             start = params.get("start")
             if start is not None:
                 cmd += ["-ss", str(start)]
-            cmd += ["-i", str(input_path)]
+            cmd += ["-i", source_arg(input_path)]
         cmd += self._audio_input(params)
+        cmd += self._extra_inputs(params, ctx)
 
         if is_last:
             if out is None:

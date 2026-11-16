@@ -237,3 +237,47 @@ class TestPipeStage:
     def test_a_final_stage_needs_somewhere_to_write(self, step, ctx):
         with pytest.raises(ValueError, match="needs an 'output'"):
             step.command({}, ctx, upstream={"input_args": ["-i", "pipe:0"]}, out=None, is_last=True)
+
+
+class TestFilterGraphAndUrls:
+    """What textcut exports: seeked inputs + a filter graph, often over a URL."""
+
+    def test_filter_complex_and_maps_replace_the_audio_mapping(self, step, ctx):
+        args = step._output_args({"filter_complex": "[0:v]null[v];\n[0:a]anull[a]\n", "map": ["[v]", "[a]"]},
+                                 ctx, has_audio=True)
+        assert args_after(args, "-filter_complex") == "[0:v]null[v];\n[0:a]anull[a]"
+        assert [args[i + 1] for i, a in enumerate(args) if a == "-map"] == ["[v]", "[a]"]
+        assert "1:a" not in args
+
+    def test_filter_complex_rejects_simple_filters(self, step, ctx):
+        with pytest.raises(ValueError, match="filter_complex"):
+            step._output_args({"filter_complex": "[0:v]null[v]", "scale": "-2:720"}, ctx, has_audio=False)
+        with pytest.raises(ValueError, match="filter_complex"):
+            step._output_args({"filter_complex": "[0:v]null[v]", "include": [[0, 1]]}, ctx, has_audio=False)
+
+    def test_map_must_be_a_list(self, step, ctx):
+        with pytest.raises(ValueError, match="list"):
+            step._output_args({"map": "[v]"}, ctx, has_audio=False)
+
+    def test_url_input_is_passed_through_and_not_checked(self, step, tmp_path, capsys):
+        ctx = StepContext(step_id="enc", workdir=tmp_path, dry_run=True)
+        url = "https://example.org/talk.mp4"
+        step.run({"input": url, "output": "out.mp4", "start": 12,
+                  "inputs": [{"file": url, "start": 30, "duration": 4}, url],
+                  "filter_complex": "[0:v][0:a][1:v][1:a][2:v][2:a]concat=n=3:v=1:a=1[v][a]",
+                  "map": ["[v]", "[a]"]}, ctx)
+        printed = capsys.readouterr().out
+        assert f"-ss 12 -i {url} -ss 30 -t 4 -i {url} -i {url}" in printed
+
+    def test_a_url_input_skips_the_existence_check(self, step, tmp_path):
+        ctx = StepContext(step_id="enc", workdir=tmp_path)
+        cmds = []
+        ctx.run = lambda cmd, **kw: cmds.append(cmd)
+        step.run({"input": "http://host/a.mp4", "output": "out.mp4"}, ctx)
+        assert cmds[0][cmds[0].index("-i") + 1] == "http://host/a.mp4"
+
+    def test_a_missing_extra_input_is_reported(self, step, tmp_path):
+        ctx = StepContext(step_id="enc", workdir=tmp_path)
+        with pytest.raises(SystemExit, match="input file not found"):
+            step.run({"input": "https://x/a.mp4", "output": "o.mp4",
+                      "inputs": [{"file": str(tmp_path / "nope.mp4")}]}, ctx)

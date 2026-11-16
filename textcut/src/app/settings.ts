@@ -23,6 +23,8 @@ export interface Settings {
   /** processing applied on export (crop, scale, audio filters) */
   ops: OpState[];
   exportMode: string;
+  /** commands use $INPUT/$OUTPUT and radiant vars instead of the literal URL */
+  useVars: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -38,6 +40,7 @@ const DEFAULTS: Settings = {
   smoothJoins: true,
   ops: [],
   exportMode: "",
+  useVars: false,
 };
 
 const KEY = "textcut.settings.v1";

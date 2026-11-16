@@ -125,6 +125,9 @@ describe("formats", () => {
     expect(y).toContain('input: "in.mp4"');
     expect(y).toContain('- { start: "00:00:01.000", end: "00:00:02.500" }   # hello there');
     expect(formatClips(clips, "trim-yaml", { style: "seconds" })).toContain("- { start: 1.000, end: 2.500 }");
+    const r = formatClips(clips, "radiant", { input: "in.mp4" });
+    expect(r).toContain("action: ffmpeg");
+    expect(r).toContain('input: "in.mp4"');
   });
   it("clip yaml / ffmpeg / csv / srt", () => {
     expect(formatClips(clips, "clip-yaml")).toContain("id: reel2");

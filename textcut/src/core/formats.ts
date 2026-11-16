@@ -1,16 +1,18 @@
 import { fmtTime, type TimeStyle } from "./time";
 import type { TimeRange } from "./ranges";
 import { buildJob, jobToShell } from "./ffjob";
+import { radiantPlan } from "./radiant";
 
 export interface Clip extends TimeRange {
   text?: string;
 }
 
-export type ClipFormat = "ranges" | "trim-yaml" | "clip-yaml" | "ffmpeg" | "csv" | "json" | "srt";
+export type ClipFormat = "ranges" | "radiant" | "trim-yaml" | "clip-yaml" | "ffmpeg" | "csv" | "json" | "srt";
 
 export const CLIP_FORMATS: Array<{ id: ClipFormat; label: string }> = [
   { id: "ranges", label: "Start ⇥ end lines" },
-  { id: "trim-yaml", label: "radiant trim step (one cut)" },
+  { id: "radiant", label: "radiant plan (ffmpeg step, one cut)" },
+  { id: "trim-yaml", label: "radiant trim step (one cut, approximate)" },
   { id: "clip-yaml", label: "radiant clip steps (one reel each)" },
   { id: "ffmpeg", label: "ffmpeg command" },
   { id: "csv", label: "CSV" },
@@ -39,6 +41,11 @@ export function formatClips(clips: readonly Clip[], kind: ClipFormat, opts: Form
   switch (kind) {
     case "ranges":
       return clips.map((c) => `${T(c.s)}\t${T(c.e)}`).join("\n");
+
+    case "radiant":
+      return radiantPlan({
+        input, output, ranges: clips, mode: hasVideo ? "exact" : "audio", hasVideo, fade: opts.fade ?? 0.01,
+      }, { comment: `textcut — ${clips.length} range${clips.length === 1 ? "" : "s"}` });
 
     case "trim-yaml":
       return [

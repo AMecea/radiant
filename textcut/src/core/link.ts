@@ -14,6 +14,8 @@ import type { TimeRange } from "./ranges";
  *   at     start position, seconds or clock time
  *   dw     deleted words, by index: "3-5,10"
  *   dg     deleted pauses, by (index of the word before them) + 1: "0,14"
+ *   x      an export to open on arrival (ranges, format, processing), packed:
+ *          see {@link ExportPreset}
  */
 export interface LinkParams {
   words?: string;
@@ -25,6 +27,26 @@ export interface LinkParams {
   at?: number;
   dw?: string;
   dg?: string;
+  x?: string;
+}
+
+/** A ready-to-run export, shared in a link (`x=`, deflate + base64url JSON). */
+export interface ExportPreset {
+  v: 1;
+  /** the ranges to export, in order, [start, end] seconds */
+  r: Array<[number, number]>;
+  /** dialog heading */
+  h?: string;
+  /** format id (exact / copy / wav / m4a / mp3) */
+  m?: string;
+  /** enabled processing ops */
+  o?: Array<{ id: string; p: Record<string, string | number> }>;
+  /** smooth joins on/off */
+  f?: 0 | 1;
+  /** output file name, without extension */
+  n?: string;
+  /** commands use variables */
+  vars?: 0 | 1;
 }
 
 export function readLink(loc: { search: string; hash: string }): LinkParams {
@@ -40,6 +62,8 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   const dw = get("dw"), dg = get("dg");
   if (dw) out.dw = dw;
   if (dg) out.dg = dg;
+  const x = get("x");
+  if (x) out.x = x;
   const clips = get("clips");
   if (clips) out.clips = decodeRanges(clips);
   const sel = get("sel");
@@ -63,6 +87,7 @@ export function buildLink(base: string, p: LinkParams): string {
   if (p.at != null) h.set("at", String(+p.at.toFixed(3)));
   if (p.dw) h.set("dw", p.dw);
   if (p.dg) h.set("dg", p.dg);
+  if (p.x) h.set("x", p.x);
   if (p.tx) h.set("tx", p.tx); // last: it's the long one
   const frag = h.toString().replace(/%2F/gi, "/").replace(/%3A/gi, ":").replace(/%2C/gi, ",");
   return `${base.replace(/#.*$/, "")}#${frag}`;
@@ -138,4 +163,19 @@ export async function packJson(obj: unknown): Promise<string> {
 export async function unpackJson<T = unknown>(s: string): Promise<T> {
   const bytes = await pipeBytes(b64urlDecode(s), new DecompressionStream("deflate-raw"));
   return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
+export async function packPreset(p: ExportPreset): Promise<string> {
+  return packJson(p);
+}
+
+export async function unpackPreset(s: string): Promise<ExportPreset | null> {
+  try {
+    const p = await unpackJson<ExportPreset>(s);
+    if (p?.v !== 1 || !Array.isArray(p.r)) return null;
+    p.r = p.r.filter((x) => Array.isArray(x) && Number(x[1]) > Number(x[0])).map(([a, b]) => [Number(a), Number(b)]);
+    return p.r.length ? p : null;
+  } catch {
+    return null;
+  }
 }

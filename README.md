@@ -22,8 +22,10 @@ steps once and the runner executes it, resumably.
 `<stem>.words.json` the `transcribe` step writes with `word_timestamps: true`, together
 with the audio/video. You can click words to seek, search, select text to select audio,
 copy IN/OUT times for reels, cut out pauses, and export the cut (WAV natively; video/MP3/M4A
-via ffmpeg.wasm), or copy it as a ready-made `trim`/`clip` step. Inputs are local files or
-public URLs carried in the link. See [textcut/README.md](textcut/README.md).
+via ffmpeg.wasm, with crop/resize/audio filters). It can also copy the same cut as an
+ffmpeg command or a radiant plan (an `ffmpeg` step), optionally with input/output
+variables, or as a link that opens the export for someone else. Inputs are local files
+or public URLs carried in the link. See [textcut/README.md](textcut/README.md).
 
 ## `radiant` — the pipeline tool
 
@@ -68,7 +70,7 @@ Each action declares its parameters and outputs uniformly (the `params` / `outpu
 
 ### `ffmpeg` — general-purpose transcode / convert
 
-The plain ffmpeg escape hatch (no sync/braw logic): one input, one output, and the common knobs — `vcodec`/`acodec` (or `copy` to stream-copy), `crf`, `preset`, `video_bitrate`/`audio_bitrate`, `scale`, `vf`, `fps`, `start`/`end`/`duration`, `no_audio`, `audio` (mux a separate audio track), `pix_fmt`, `faststart` (mp4/mov only), `format`, plus an `extra_args` list for raw flags. It also accepts `include`/`exclude` range lists (the same cut the `trim` action does — `select`/`aselect`, video + audio cut together and in sync; forces a re-encode). Handy for downscales, trims, audio extraction, gif previews, and remuxes; honours `--preview` (caps to N seconds). See `examples/ffmpeg.yaml` for transcode / trim / extract-audio / gif samples.
+The plain ffmpeg escape hatch (no sync/braw logic): one input, one output, and the common knobs — `vcodec`/`acodec` (or `copy` to stream-copy), `crf`, `preset`, `video_bitrate`/`audio_bitrate`, `scale`, `vf`, `fps`, `start`/`end`/`duration`, `no_audio`, `audio` (mux a separate audio track), `pix_fmt`, `faststart` (mp4/mov only), `format`, plus an `extra_args` list for raw flags. It also accepts `include`/`exclude` range lists (the same cut the `trim` action does — `select`/`aselect`, video + audio cut together and in sync; forces a re-encode). For a real filter graph use `filter_complex` + `map`, with `inputs` adding more seeked inputs (`{file, start?, duration?}`). This is what textcut exports: frame-accurate trims joined with `concat`, then crop and audio filters. `input` and `inputs` may be `http(s)://` URLs, which ffmpeg reads directly. Handy for downscales, trims, audio extraction, gif previews, and remuxes; honours `--preview` (caps to N seconds). See `examples/ffmpeg.yaml` for transcode / trim / extract-audio / gif samples.
 
 ### `trim` — keep or drop a list of time ranges
 
