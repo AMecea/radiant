@@ -16,6 +16,15 @@ steps once and the runner executes it, resumably.
 > yourself (see [Requirements](#requirements)). If you don't shoot BRAW, ignore them —
 > everything else works on any container ffmpeg can read.
 
+## `textcut` — cut by transcript, in the browser
+
+[`textcut/`](textcut/) is a static web app (TypeScript, no backend) that opens the
+`<stem>.words.json` the `transcribe` step writes with `word_timestamps: true`, together
+with the audio/video. You can click words to seek, search, select text to select audio,
+copy IN/OUT times for reels, cut out pauses, and export the cut (WAV natively; video/MP3/M4A
+via ffmpeg.wasm), or copy it as a ready-made `trim`/`clip` step. Inputs are local files or
+public URLs carried in the link. See [textcut/README.md](textcut/README.md).
+
 ## `radiant` — the pipeline tool
 
 The whole flow (sync → encode → upload → transcribe → reel-clip → upload) is declared

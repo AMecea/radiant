@@ -1,0 +1,439 @@
+{
+  "language": "ro",
+  "duration": 42.439,
+  "segments": [
+    {
+      "start": 0.8,
+      "end": 5.341,
+      "text": "Bună ziua și bine ați venit la această scurtă demonstrație.",
+      "words": [
+        {
+          "start": 0.8,
+          "end": 1.126,
+          "word": "Bună",
+          "probability": 0.7453
+        },
+        {
+          "start": 1.146,
+          "end": 1.452,
+          "word": "ziua",
+          "probability": 0.8608
+        },
+        {
+          "start": 1.472,
+          "end": 1.687,
+          "word": "și",
+          "probability": 0.8522
+        },
+        {
+          "start": 1.707,
+          "end": 2.042,
+          "word": "bine",
+          "probability": 0.721
+        },
+        {
+          "start": 2.062,
+          "end": 2.351,
+          "word": "ați",
+          "probability": 0.9481
+        },
+        {
+          "start": 2.371,
+          "end": 2.734,
+          "word": "venit",
+          "probability": 0.8882
+        },
+        {
+          "start": 3.084,
+          "end": 3.34,
+          "word": "la",
+          "probability": 0.819
+        },
+        {
+          "start": 3.69,
+          "end": 4.129,
+          "word": "această",
+          "probability": 0.9575
+        },
+        {
+          "start": 4.149,
+          "end": 4.551,
+          "word": "scurtă",
+          "probability": 0.7353
+        },
+        {
+          "start": 4.571,
+          "end": 5.341,
+          "word": "demonstrație.",
+          "probability": 0.7542
+        }
+      ]
+    },
+    {
+      "start": 6.261,
+      "end": 11.015,
+      "text": "Astăzi vorbim despre cum putem tăia un video folosind doar textul.",
+      "words": [
+        {
+          "start": 6.261,
+          "end": 6.681,
+          "word": "Astăzi",
+          "probability": 0.8643
+        },
+        {
+          "start": 6.701,
+          "end": 7.096,
+          "word": "vorbim",
+          "probability": 0.7618
+        },
+        {
+          "start": 7.116,
+          "end": 7.54,
+          "word": "despre",
+          "probability": 0.7942
+        },
+        {
+          "start": 7.56,
+          "end": 7.851,
+          "word": "cum",
+          "probability": 0.7899
+        },
+        {
+          "start": 7.871,
+          "end": 8.272,
+          "word": "putem",
+          "probability": 0.7732
+        },
+        {
+          "start": 8.292,
+          "end": 8.634,
+          "word": "tăia",
+          "probability": 0.9625
+        },
+        {
+          "start": 8.654,
+          "end": 8.887,
+          "word": "un",
+          "probability": 0.9941
+        },
+        {
+          "start": 8.907,
+          "end": 9.285,
+          "word": "video",
+          "probability": 0.9271
+        },
+        {
+          "start": 9.305,
+          "end": 9.824,
+          "word": "folosind",
+          "probability": 0.7118
+        },
+        {
+          "start": 9.844,
+          "end": 10.205,
+          "word": "doar",
+          "probability": 0.8719
+        },
+        {
+          "start": 10.555,
+          "end": 11.015,
+          "word": "textul.",
+          "probability": 0.9086
+        }
+      ]
+    },
+    {
+      "start": 13.435,
+      "end": 17.456,
+      "text": "Selectați cuvintele, apoi exportați fragmentul ca un reel.",
+      "words": [
+        {
+          "start": 13.435,
+          "end": 13.966,
+          "word": "Selectați",
+          "probability": 0.7281
+        },
+        {
+          "start": 13.986,
+          "end": 14.612,
+          "word": "cuvintele,",
+          "probability": 0.7195
+        },
+        {
+          "start": 14.632,
+          "end": 14.957,
+          "word": "apoi",
+          "probability": 0.8734
+        },
+        {
+          "start": 14.977,
+          "end": 15.538,
+          "word": "exportați",
+          "probability": 0.915
+        },
+        {
+          "start": 15.888,
+          "end": 16.486,
+          "word": "fragmentul",
+          "probability": 0.9822
+        },
+        {
+          "start": 16.506,
+          "end": 16.765,
+          "word": "ca",
+          "probability": 0.8481
+        },
+        {
+          "start": 16.785,
+          "end": 17.018,
+          "word": "un",
+          "probability": 0.9215
+        },
+        {
+          "start": 17.038,
+          "end": 17.456,
+          "word": "reel.",
+          "probability": 0.849
+        }
+      ]
+    },
+    {
+      "start": 19.876,
+      "end": 24.585,
+      "text": "Pauzele lungi sunt detectate automat din timpii cuvintelor.",
+      "words": [
+        {
+          "start": 19.876,
+          "end": 20.355,
+          "word": "Pauzele",
+          "probability": 0.965
+        },
+        {
+          "start": 20.705,
+          "end": 21.119,
+          "word": "lungi",
+          "probability": 0.7835
+        },
+        {
+          "start": 21.139,
+          "end": 21.468,
+          "word": "sunt",
+          "probability": 0.9653
+        },
+        {
+          "start": 21.818,
+          "end": 22.355,
+          "word": "detectate",
+          "probability": 0.7529
+        },
+        {
+          "start": 22.375,
+          "end": 22.829,
+          "word": "automat",
+          "probability": 0.8455
+        },
+        {
+          "start": 22.849,
+          "end": 23.125,
+          "word": "din",
+          "probability": 0.7012
+        },
+        {
+          "start": 23.145,
+          "end": 23.565,
+          "word": "timpii",
+          "probability": 0.8699
+        },
+        {
+          "start": 23.915,
+          "end": 24.585,
+          "word": "cuvintelor.",
+          "probability": 0.8546
+        }
+      ]
+    },
+    {
+      "start": 24.905,
+      "end": 29.928,
+      "text": "Căutarea ignoră diacriticele, deci șase și sase sunt la fel.",
+      "words": [
+        {
+          "start": 24.905,
+          "end": 25.422,
+          "word": "Căutarea",
+          "probability": 0.9613
+        },
+        {
+          "start": 25.772,
+          "end": 26.216,
+          "word": "ignoră",
+          "probability": 0.8678
+        },
+        {
+          "start": 26.236,
+          "end": 26.973,
+          "word": "diacriticele,",
+          "probability": 0.8445
+        },
+        {
+          "start": 26.993,
+          "end": 27.308,
+          "word": "deci",
+          "probability": 0.9954
+        },
+        {
+          "start": 27.328,
+          "end": 27.637,
+          "word": "șase",
+          "probability": 0.8802
+        },
+        {
+          "start": 27.657,
+          "end": 27.912,
+          "word": "și",
+          "probability": 0.861
+        },
+        {
+          "start": 28.262,
+          "end": 28.611,
+          "word": "sase",
+          "probability": 0.7211
+        },
+        {
+          "start": 28.631,
+          "end": 28.961,
+          "word": "sunt",
+          "probability": 0.8903
+        },
+        {
+          "start": 29.311,
+          "end": 29.569,
+          "word": "la",
+          "probability": 0.8422
+        },
+        {
+          "start": 29.589,
+          "end": 29.928,
+          "word": "fel.",
+          "probability": 0.9933
+        }
+      ]
+    },
+    {
+      "start": 31.548,
+      "end": 36.295,
+      "text": "Iisus le-a spus ucenicilor o pildă, iar Iisus a tăcut apoi.",
+      "words": [
+        {
+          "start": 31.548,
+          "end": 31.9,
+          "word": "Iisus",
+          "probability": 0.7307
+        },
+        {
+          "start": 31.92,
+          "end": 32.241,
+          "word": "le-a",
+          "probability": 0.9487
+        },
+        {
+          "start": 32.261,
+          "end": 32.563,
+          "word": "spus",
+          "probability": 0.9853
+        },
+        {
+          "start": 32.583,
+          "end": 33.165,
+          "word": "ucenicilor",
+          "probability": 0.863
+        },
+        {
+          "start": 33.185,
+          "end": 33.392,
+          "word": "o",
+          "probability": 0.9936
+        },
+        {
+          "start": 33.742,
+          "end": 34.188,
+          "word": "pildă,",
+          "probability": 0.7783
+        },
+        {
+          "start": 34.208,
+          "end": 34.476,
+          "word": "iar",
+          "probability": 0.9316
+        },
+        {
+          "start": 34.496,
+          "end": 34.903,
+          "word": "Iisus",
+          "probability": 0.7989
+        },
+        {
+          "start": 34.923,
+          "end": 35.153,
+          "word": "a",
+          "probability": 0.9955
+        },
+        {
+          "start": 35.503,
+          "end": 35.912,
+          "word": "tăcut",
+          "probability": 0.9455
+        },
+        {
+          "start": 35.932,
+          "end": 36.295,
+          "word": "apoi.",
+          "probability": 0.8553
+        }
+      ]
+    },
+    {
+      "start": 36.615,
+      "end": 39.319,
+      "text": "Mulțumim pentru atenție și la revedere.",
+      "words": [
+        {
+          "start": 36.615,
+          "end": 37.174,
+          "word": "Mulțumim",
+          "probability": 0.937
+        },
+        {
+          "start": 37.194,
+          "end": 37.599,
+          "word": "pentru",
+          "probability": 0.8815
+        },
+        {
+          "start": 37.619,
+          "end": 38.119,
+          "word": "atenție",
+          "probability": 0.9169
+        },
+        {
+          "start": 38.139,
+          "end": 38.427,
+          "word": "și",
+          "probability": 0.7242
+        },
+        {
+          "start": 38.447,
+          "end": 38.695,
+          "word": "la",
+          "probability": 0.8013
+        },
+        {
+          "start": 38.715,
+          "end": 39.319,
+          "word": "revedere.",
+          "probability": 0.8831
+        }
+      ]
+    }
+  ]
+}
