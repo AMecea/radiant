@@ -9,7 +9,8 @@ import type { TimeRange } from "./ranges";
  *   media  URL of the audio/video file
  *   tx     the transcript itself, deflate-raw + base64url compressed (compact form)
  *   title  display title
- *   clips  "s-e,s-e,…" clip list (seconds or clock times)
+ *   clips  "s-e,s-e,…" one clip's segments (seconds or clock times)
+ *   reels  several named clips: "Intro~1-5,9-12|Q&A~30-41" (name~segments, "|" between)
  *   sel    "s-e" selection to restore
  *   at     start position, seconds or clock time
  *   dw     deleted words, by index: "3-5,10"
@@ -23,6 +24,8 @@ export interface LinkParams {
   tx?: string;
   title?: string;
   clips?: TimeRange[];
+  /** several named clips (wins over `clips`) */
+  reels?: NamedRanges[];
   sel?: TimeRange;
   at?: number;
   dw?: string;
@@ -49,6 +52,11 @@ export interface ExportPreset {
   vars?: 0 | 1;
 }
 
+export interface NamedRanges {
+  name: string;
+  ranges: TimeRange[];
+}
+
 export function readLink(loc: { search: string; hash: string }): LinkParams {
   const q = new URLSearchParams(loc.search);
   const h = new URLSearchParams(loc.hash.replace(/^#/, ""));
@@ -66,6 +74,8 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   if (x) out.x = x;
   const clips = get("clips");
   if (clips) out.clips = decodeRanges(clips);
+  const reels = get("reels");
+  if (reels) out.reels = decodeReels(reels);
   const sel = get("sel");
   if (sel) {
     const r = decodeRanges(sel)[0];
@@ -82,7 +92,8 @@ export function buildLink(base: string, p: LinkParams): string {
   if (p.title) h.set("title", p.title);
   if (p.media) h.set("media", p.media);
   if (p.words) h.set("words", p.words);
-  if (p.clips?.length) h.set("clips", encodeRanges(p.clips));
+  if (p.reels?.length) h.set("reels", encodeReels(p.reels));
+  else if (p.clips?.length) h.set("clips", encodeRanges(p.clips));
   if (p.sel) h.set("sel", encodeRanges([p.sel]));
   if (p.at != null) h.set("at", String(+p.at.toFixed(3)));
   if (p.dw) h.set("dw", p.dw);
@@ -95,6 +106,20 @@ export function buildLink(base: string, p: LinkParams): string {
 
 export function encodeRanges(rs: readonly TimeRange[]): string {
   return rs.map((r) => `${+r.s.toFixed(3)}-${+r.e.toFixed(3)}`).join(",");
+}
+
+/** Names lose the separators ("~", "|") — everything else survives URL encoding. */
+export function encodeReels(reels: readonly NamedRanges[]): string {
+  return reels.map((r) => `${r.name.replace(/[~|]+/g, " ").trim()}~${encodeRanges(r.ranges)}`).join("|");
+}
+
+export function decodeReels(str: string): NamedRanges[] {
+  return str.split("|").flatMap((part, i) => {
+    const k = part.lastIndexOf("~");
+    const name = (k >= 0 ? part.slice(0, k) : "").trim() || `Clip ${i + 1}`;
+    const ranges = decodeRanges(k >= 0 ? part.slice(k + 1) : part);
+    return ranges.length || k >= 0 ? [{ name, ranges }] : [];
+  });
 }
 
 export function decodeRanges(str: string): TimeRange[] {

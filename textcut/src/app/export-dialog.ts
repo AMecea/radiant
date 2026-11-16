@@ -27,6 +27,8 @@ export interface ExportContext {
   frame: Frame | null;
   video: HTMLVideoElement;
   stem: string;
+  /** default output name (without extension); `<stem>_cut` otherwise */
+  fileName?: string;
   settings: Settings;
   /** opened from a shared link: its format & processing (the user's settings stay untouched) */
   preset?: ExportPreset | null;
@@ -134,7 +136,7 @@ export function openExportDialog(ctx: ExportContext): void {
   }
 
   // ---------------------------------------------------------------- command / plan
-  const name = h("input", { type: "text", value: preset?.n ?? `${ctx.stem}_cut`, "aria-label": "File name", oninput: () => update() });
+  const name = h("input", { type: "text", value: preset?.n ?? ctx.fileName ?? `${ctx.stem}_cut`, "aria-label": "File name", oninput: () => update() });
   const cmdPre = h("pre", { class: "mono cmd" });
   const yamlPre = h("pre", { class: "mono cmd" });
   const notes = h("div", {});
@@ -175,7 +177,7 @@ export function openExportDialog(ctx: ExportContext): void {
     yamlPre.textContent = plan;
   }
 
-  const stem = () => name.value || ctx.stem + "_cut";
+  const stem = () => name.value || ctx.fileName || ctx.stem + "_cut";
   const snippet = (title: string, note: string, pre: HTMLElement, copy: () => string, file: () => [string, string, string]) =>
     h("div", { class: "snippet" },
       h("div", { class: "row" }, h("strong", {}, title), h("span", { class: "muted" }, note), h("span", { class: "spacer" }),

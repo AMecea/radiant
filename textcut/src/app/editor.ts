@@ -13,6 +13,12 @@ import { mediaFromFile, mediaFromUrl, stemOf, type LoadedTranscript, type MediaS
 import { openExportDialog } from "./export-dialog";
 import { Timeline } from "./timeline";
 
+/** A clip: segments of the recording, played and exported back to back. */
+interface Reel {
+  name: string;
+  parts: Clip[];
+}
+
 export interface EditorInit {
   loaded: LoadedTranscript;
   media: MediaSource | null;
@@ -39,7 +45,10 @@ export class Editor {
 
   private sel: WordRange | null = null;
   private selAnchor = -1;
-  private clips: Clip[] = [];
+  /** clips: each a named list of segments, exported as one cut */
+  private reels: Reel[] = [];
+  /** the clip that A / S add to */
+  private active = 0;
   private hits: WordRange[] = [];
   private hitIdx = -1;
   private cur = -1;
@@ -262,6 +271,8 @@ export class Editor {
       this.timeEl.textContent = fmtShort(t);
       return;
     }
+    // Move the word cursor now: keys pressed before the seek lands (Shift+→) use it.
+    this.updateCurrent(wordAt(this.words, t + 1e-3), false);
     if (this.video.readyState === 0) this.pendingAt = t;
     else this.video.currentTime = t;
   }
@@ -547,8 +558,8 @@ export class Editor {
         h("button", { title: "Copy the selected text", onclick: () => void copyText(text, "Text") }, "Copy text"),
         h("button", { title: "Link that opens on this selection", onclick: () => void this.copyLink(true) }, "🔗 Link"),
         h("span", { class: "spacer" }),
-        h("button", { title: "Add as one clip (A)", onclick: () => this.addSelAsClip(false) }, "+ Clip"),
-        nPauses ? h("button", { title: "Add as clips with the pauses cut out (S)", onclick: () => this.addSelAsClip(true) }, "+ Clips w/o pauses") : null,
+        h("button", { title: `Add to ${this.reels[this.active]?.name ?? "a new clip"} (A)`, onclick: () => this.addSelAsClip(false) }, "+ Add to clip"),
+        nPauses ? h("button", { title: "Add as segments with the pauses cut out (S)", onclick: () => this.addSelAsClip(true) }, "+ Add w/o pauses") : null,
         h("button", { title: "Export just this selection", onclick: () => this.exportRanges("Export selection", [{ ...r, text }]) }, "Export…")),
       h("div", { class: "row edit-row" },
         h("button", {
@@ -598,10 +609,43 @@ export class Editor {
     return `textcut.clips.${(hsh >>> 0).toString(36)}`;
   }
 
+  private get reelsKey(): string {
+    return this.clipsKey.replace(".clips.", ".reels.");
+  }
+
+  /** The current clip's segments (empty when there is no clip yet). */
+  private get clips(): Clip[] {
+    return this.reels[this.active]?.parts ?? [];
+  }
+
+  private set clips(parts: Clip[]) {
+    this.currentReel().parts = parts;
+  }
+
+  /** The current clip, creating the first one when there is none. */
+  private currentReel(): Reel {
+    if (!this.reels.length) { this.reels.push({ name: "Clip 1", parts: [] }); this.active = 0; }
+    this.active = Math.min(this.active, this.reels.length - 1);
+    return this.reels[this.active]!;
+  }
+
   private restoreClips(): void {
-    const fromLink = this.init.link.clips;
-    const saved: Clip[] = fromLink?.length ? fromLink : loadJson<Clip[]>(this.clipsKey) ?? [];
-    this.clips = saved.map((c) => ({ s: c.s, e: c.e, text: c.text ?? this.textIn(c) }));
+    const { reels, clips } = this.init.link;
+    const withText = (rs: readonly TimeRange[]) => rs.map((c) => ({ s: c.s, e: c.e, text: (c as Clip).text ?? this.textIn(c) }));
+    if (reels?.length) {
+      this.reels = reels.map((r) => ({ name: r.name, parts: withText(r.ranges) }));
+      this.active = 0;
+    } else if (clips?.length) {
+      this.reels = [{ name: "Clip 1", parts: withText(clips) }];
+      this.active = 0;
+    } else {
+      const saved = loadJson<{ reels: Reel[]; active: number }>(this.reelsKey);
+      // Before multiple clips, one list of segments was stored under the clips key.
+      const legacy = saved ? null : loadJson<Clip[]>(this.clipsKey);
+      this.reels = saved?.reels?.map((r) => ({ name: String(r.name || "Clip"), parts: withText(r.parts ?? []) }))
+        ?? (legacy?.length ? [{ name: "Clip 1", parts: withText(legacy) }] : []);
+      this.active = Math.max(0, Math.min(saved?.active ?? 0, this.reels.length - 1));
+    }
     this.clipsChanged(false);
   }
 
@@ -613,21 +657,47 @@ export class Editor {
   private addSelAsClip(splitPauses: boolean): void {
     if (!this.sel) return;
     const { a, b } = this.sel;
+    const reel = this.currentReel();
     const parts = splitPauses ? splitAtPauses(this.words, a, b, this.settings.pauseMin) : [{ a, b }];
     for (const p of parts) {
       const r = rangeOf(this.words, p.a, p.b, this.settings.pad, this.duration);
-      this.clips.push({ ...r, text: textOf(this.words, p.a, p.b) });
+      reel.parts.push({ ...r, text: textOf(this.words, p.a, p.b) });
     }
     this.clipsChanged();
-    toast(parts.length > 1 ? `Added ${parts.length} clips (pauses removed)` : "Clip added");
+    toast(parts.length > 1 ? `Added ${parts.length} segments to ${reel.name} (pauses removed)` : `Added to ${reel.name}`);
     this.clearSel();
   }
 
+  /** Start a new, empty clip; A / S add to it from now on. */
+  private newReel(): void {
+    const n = this.reels.reduce((m, r) => Math.max(m, Number(r.name.match(/^Clip (\d+)$/)?.[1] ?? 0)), 0) + 1;
+    this.reels.push({ name: `Clip ${Math.max(n, this.reels.length + 1)}`, parts: [] });
+    this.active = this.reels.length - 1;
+    this.clipsChanged();
+    toast(`${this.reels[this.active]!.name} started — select text and press A to add to it`, "info");
+  }
+
+  private selectReel(i: number): void {
+    if (i === this.active) return;
+    this.active = i;
+    this.clipsChanged();
+  }
+
+  private removeReel(i: number): void {
+    const r = this.reels[i]!;
+    if (r.parts.length && !confirm(`Remove “${r.name}” and its ${r.parts.length} segment${r.parts.length > 1 ? "s" : ""}?`)) return;
+    this.reels.splice(i, 1);
+    if (this.active >= i) this.active = Math.max(0, this.active - 1);
+    this.clipsChanged();
+  }
+
   private clipsChanged(save = true): void {
-    if (save) saveJson(this.clipsKey, this.clips);
+    if (save) saveJson(this.reelsKey, { reels: this.reels, active: this.active });
+    this.txPacked = null;
     this.paintClips();
     this.timeline.setClips(this.clips);
     this.renderClips();
+    this.renderSelBar();
   }
 
   private paintClips(): void {
@@ -640,59 +710,101 @@ export class Editor {
 
   private highlightPlayingClip(): void {
     const m = this.mode;
-    this.clipsEl.querySelectorAll("li").forEach((li, i) =>
+    this.clipsEl.querySelectorAll(".reel.active li").forEach((li, i) =>
       li.classList.toggle("now", m.kind === "queue" && i === m.i));
   }
 
   private renderClips(): void {
     const el = this.clipsEl;
     el.replaceChildren();
-    const total = this.clips.reduce((n, c) => n + (c.e - c.s), 0);
-    const fmtSel = h("select", {
-      "aria-label": "Copy format",
-      onchange: () => { this.settings.copyFormat = fmtSel.value as ClipFormat; saveSettings(this.settings); },
-    }, ...CLIP_FORMATS.map((f) => h("option", { value: f.id, selected: f.id === this.settings.copyFormat }, f.label)));
-
+    const dur = (ps: readonly Clip[]) => ps.reduce((n, c) => n + (c.e - c.s), 0);
     el.append(h("header", {},
       h("h3", {}, "Clips"),
-      h("span", { class: "muted" }, this.clips.length ? `${this.clips.length} · ${fmtDur(total)}` : "none yet"),
+      h("span", { class: "muted" }, this.reels.length ? String(this.reels.length) : "none yet"),
       h("span", { class: "spacer" }),
-      this.clips.length ? h("button", { title: "Play all clips back to back", onclick: () => this.playQueue(this.clips) }, "▶ Play all") : null));
+      h("button", { title: "Start a new clip; A / S add the selection to it (N)", onclick: () => this.newReel() }, "+ New clip")));
 
-    if (!this.clips.length) {
+    if (!this.reels.length) {
       el.append(h("p", { class: "hint" }, "Select text and press ", h("kbd", {}, "A"),
-        " (or “+ Clip”) to collect ranges. Clips play back to back and export as one cut."));
+        " to start a clip. A clip is a list of segments, played and exported back to back. ",
+        "Make as many clips as you like with “+ New clip”."));
       return;
     }
-    const ol = h("ol", {});
-    this.clips.forEach((c, i) => {
-      const li = h("li", {},
-        h("button", { class: "icon", title: "Play clip", onclick: () => this.playRange(c) }, "▶"),
-        h("div", {
-          class: "clip-body", title: "Select these words",
-          onclick: () => { const r = wordsIn(this.words, c.s + 1e-3, c.e - 1e-3); if (r) { this.setSel(r); this.seek(c.s); this.wordEls[r.a]?.scrollIntoView({ block: "center" }); } },
-        },
-          h("div", { class: "mono" }, `${fmtShort(c.s)} → ${fmtShort(c.e)}`, h("span", { class: "muted" }, ` ${fmtDur(c.e - c.s)}`)),
-          h("div", { class: "clip-text" }, oneLine(c.text ?? "", 90))),
-        h("div", { class: "clip-actions" },
-          h("button", { class: "icon", title: "Move up", disabled: i === 0, onclick: () => this.moveClip(i, -1) }, "↑"),
-          h("button", { class: "icon", title: "Move down", disabled: i === this.clips.length - 1, onclick: () => this.moveClip(i, 1) }, "↓"),
-          h("button", { class: "icon", title: "Remove", onclick: () => { this.clips.splice(i, 1); this.clipsChanged(); } }, "✕")));
-      ol.append(li);
+
+    this.reels.forEach((reel, ri) => {
+      const on = ri === this.active;
+      const n = reel.parts.length;
+      const head = h("div", { class: "reel-head" },
+        on ? h("input", {
+          type: "text", class: "reel-name", value: reel.name, "aria-label": "Clip name",
+          onchange: (e: Event) => { reel.name = (e.target as HTMLInputElement).value.trim() || reel.name; this.clipsChanged(); },
+        }) : h("strong", { class: "reel-name" }, reel.name),
+        h("span", { class: "muted" }, n ? `${n} segment${n > 1 ? "s" : ""} · ${fmtDur(dur(reel.parts))}` : "empty"),
+        h("span", { class: "spacer" }),
+        h("button", {
+          class: "icon", title: `Play ${reel.name}`, disabled: !n,
+          onclick: (e: Event) => { e.stopPropagation(); this.selectReel(ri); this.playQueue(reel.parts); },
+        }, "▶"),
+        h("button", {
+          class: on ? "primary" : "", title: `Export ${reel.name} — in the browser, as an ffmpeg command or a link`, disabled: !n,
+          onclick: (e: Event) => { e.stopPropagation(); this.exportReel(ri); },
+        }, "Export…"),
+        h("button", {
+          class: "icon", title: `Remove ${reel.name}`,
+          onclick: (e: Event) => { e.stopPropagation(); this.removeReel(ri); },
+        }, "✕"));
+      const box = h("section", { class: `reel${on ? " active" : ""}` }, head);
+      if (!on) {
+        box.title = "Make this the current clip";
+        box.onclick = () => this.selectReel(ri);
+        if (n) box.append(h("div", { class: "clip-text" }, oneLine(reel.parts.map((c) => c.text ?? "").join(" … "), 90)));
+        el.append(box);
+        return;
+      }
+      if (!n) {
+        box.append(h("p", { class: "hint" }, "Select text and press ", h("kbd", {}, "A"), " (or “+ Add to clip”) to add segments."));
+        el.append(box);
+        return;
+      }
+      const ol = h("ol", {});
+      reel.parts.forEach((c, i) => {
+        ol.append(h("li", {},
+          h("button", { class: "icon", title: "Play segment", onclick: () => this.playRange(c) }, "▶"),
+          h("div", {
+            class: "clip-body", title: "Select these words",
+            onclick: () => { const r = wordsIn(this.words, c.s + 1e-3, c.e - 1e-3); if (r) { this.setSel(r); this.seek(c.s); this.wordEls[r.a]?.scrollIntoView({ block: "center" }); } },
+          },
+            h("div", { class: "mono" }, `${fmtShort(c.s)} → ${fmtShort(c.e)}`, h("span", { class: "muted" }, ` ${fmtDur(c.e - c.s)}`)),
+            h("div", { class: "clip-text" }, oneLine(c.text ?? "", 90))),
+          h("div", { class: "clip-actions" },
+            h("button", { class: "icon", title: "Move up", disabled: i === 0, onclick: () => this.moveClip(i, -1) }, "↑"),
+            h("button", { class: "icon", title: "Move down", disabled: i === n - 1, onclick: () => this.moveClip(i, 1) }, "↓"),
+            h("button", { class: "icon", title: "Remove segment", onclick: () => { reel.parts.splice(i, 1); this.clipsChanged(); } }, "✕"))));
+      });
+      const fmtSel = h("select", {
+        "aria-label": "Copy format",
+        onchange: () => { this.settings.copyFormat = fmtSel.value as ClipFormat; saveSettings(this.settings); },
+      }, ...CLIP_FORMATS.map((f) => h("option", { value: f.id, selected: f.id === this.settings.copyFormat }, f.label)));
+      box.append(ol, h("div", { class: "row wrap" },
+        fmtSel,
+        h("button", {
+          title: "Copy this clip's segments in this format (deleted words inside them are left out)",
+          onclick: () => void copyText(this.formatClips(this.settings.copyFormat, this.applyEdits(reel.parts)), reel.name),
+        }, "Copy"),
+        h("span", { class: "spacer" }),
+        h("button", { title: "Sort by time and merge overlaps", onclick: () => this.tidyClips() }, "Sort"),
+        h("button", { title: "Split every segment at its pauses", onclick: () => this.tightenClips() }, "Cut pauses"),
+        h("button", { onclick: () => { if (confirm(`Remove every segment of ${reel.name}?`)) { reel.parts = []; this.clipsChanged(); } } }, "Clear")));
+      el.append(box);
     });
-    el.append(ol);
-    el.append(h("div", { class: "row wrap" },
-      fmtSel,
-      h("button", {
-        title: "Copy the clips in this format (deleted words inside them are left out)",
-        onclick: () => void copyText(this.formatClips(this.settings.copyFormat, this.applyEdits(this.clips)), "Clips"),
-      }, "Copy"),
-      h("span", { class: "spacer" }),
-      h("button", { title: "Sort by time and merge overlaps", onclick: () => this.tidyClips() }, "Sort"),
-      h("button", { title: "Split every clip at its pauses", onclick: () => this.tightenClips() }, "Cut pauses"),
-      h("button", { onclick: () => { if (confirm("Remove all clips?")) { this.clips = []; this.clipsChanged(); } } }, "Clear"),
-      h("button", { class: "primary", onclick: () => this.exportRanges("Export clips", this.clips) }, "Export…")));
     this.highlightPlayingClip();
+  }
+
+  private exportReel(i: number): void {
+    const reel = this.reels[i]!;
+    const slug = reel.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+    this.exportRanges(`Export ${reel.name}`, reel.parts, undefined, true, null,
+      `${stemOf(this.media?.name ?? this.title)}_${slug || "clip"}`);
   }
 
   private moveClip(i: number, d: -1 | 1): void {
@@ -716,7 +828,7 @@ export class Editor {
       }));
     });
     this.clipsChanged();
-    toast(this.clips.length === before ? "No pauses inside the clips" : `${before} → ${this.clips.length} clips`);
+    toast(this.clips.length === before ? "No pauses inside the segments" : `${before} → ${this.clips.length} segments`);
   }
 
   private formatClips(kind: ClipFormat, clips: readonly Clip[] = this.clips): string {
@@ -798,7 +910,8 @@ export class Editor {
     const o = this.init.loaded.origin;
     if (o.kind === "url") p.words = o.url;
     else p.tx = await (this.txPacked ??= packJson(compactTranscript(this.t)));
-    if (this.clips.length) p.clips = this.clips;
+    const reels = this.reels.filter((r) => r.parts.length);
+    if (reels.length) p.reels = reels.map((r) => ({ name: r.name, ranges: r.parts }));
     Object.assign(p, packEdits(this.edits));
     if (withSel && this.sel) { p.sel = this.selRange(); p.at = p.sel.s; }
     return { p, warnings };
@@ -820,8 +933,8 @@ export class Editor {
     const ta = h("textarea", { class: "mono", rows: 4, readOnly: true });
     ta.value = link;
     const body = h("div", {},
-      h("p", {}, "Opens this transcript", p.media ? " and media" : "", this.clips.length ? ` with ${this.clips.length} clips` : "",
-        hasEdits(this.edits) ? `${this.clips.length ? " and" : " with"} your text edits` : "",
+      h("p", {}, "Opens this transcript", p.media ? " and media" : "", p.reels ? ` with ${p.reels.length} clip${p.reels.length > 1 ? "s" : ""}` : "",
+        hasEdits(this.edits) ? `${p.reels ? " and" : " with"} your text edits` : "",
         ". Everything is in the link — nothing is uploaded."),
       ta,
       h("p", { class: "muted" }, `${link.length.toLocaleString()} characters`,
@@ -1034,7 +1147,7 @@ export class Editor {
 
   /** Export ranges (clips / a selection): the text edits inside them are applied. */
   private exportRanges(heading: string, ranges: readonly Clip[], summary?: string, applyEdits = true,
-                       preset: ExportPreset | null = null): void {
+                       preset: ExportPreset | null = null, fileName?: string): void {
     const list = applyEdits ? this.applyEdits(ranges) : [...ranges];
     if (!list.length) { toast("Nothing left to export — it's all been cut", "err"); return; }
     const dur = (rs: readonly TimeRange[]) => rs.reduce((n, r) => n + (r.e - r.s), 0);
@@ -1048,6 +1161,7 @@ export class Editor {
       frame: this.hasVideo && v.videoWidth ? { width: v.videoWidth, height: v.videoHeight } : null,
       video: v,
       stem: stemOf(this.media?.name ?? this.title),
+      fileName,
       settings: this.settings,
       preset,
       shareLink: async (x) => {
@@ -1118,8 +1232,8 @@ export class Editor {
       ["Space", "Play / pause"], ["Click word", "Jump there"], ["Double-click", "Jump & play"],
       ["Drag / Shift+click", "Select words"], ["Shift + ← →", "Grow / shrink selection by a word"],
       ["← →", "Previous / next word"], ["Alt + ← →", "Back / forward 5 s"],
-      ["Enter", "Play selection"], ["L", "Loop selection"], ["A", "Add selection as clip"],
-      ["S", "Add selection as clips without pauses"], ["C", "Copy selection times"],
+      ["Enter", "Play selection"], ["L", "Loop selection"], ["A", "Add selection to the current clip"], ["N", "Start a new clip"],
+      ["S", "Add selection to the clip, without its pauses"], ["C", "Copy selection times"],
       ["[  ]", "Copy start / end time"], ["/", "Search"], ["Enter / Shift+Enter (in search)", "Next / previous match"],
       ["Delete / Backspace", "Cut the selected words (again: restore)"],
       ["P", "Shorten the pauses in the selection"], ["Alt+click pause", "Cut / restore that pause"],
@@ -1169,6 +1283,7 @@ export class Editor {
         }
         case "l": case "L": this.toggleLoop(); break;
         case "a": case "A": this.addSelAsClip(false); break;
+        case "n": case "N": this.newReel(); break;
         case "s": case "S": this.addSelAsClip(true); break;
         case "c": case "C": this.copySelRange(); break;
         case "Delete": case "Backspace": if (this.sel) { e.preventDefault(); this.deleteSel(); } break;

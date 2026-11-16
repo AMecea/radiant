@@ -231,3 +231,24 @@ describe("variables, radiant plans, shared exports", () => {
     expect(await unpackPreset("garbage")).toBeNull();
   });
 });
+
+describe("several named clips in a link", () => {
+  it("round-trips names and segments", async () => {
+    const { encodeReels, decodeReels } = await import("../src/core/link");
+    const reels = [
+      { name: "Intro – Q&A", ranges: [{ s: 1, e: 5 }, { s: 9.5, e: 12 }] },
+      { name: "a|b~c", ranges: [{ s: 30, e: 41 }] },
+      { name: "Empty", ranges: [] },
+    ];
+    const link = buildLink("https://h/t/", { words: "w.json", reels, clips: [{ s: 0, e: 1 }] });
+    const back = readLink({ search: "", hash: link.slice(link.indexOf("#")) });
+    expect(back.clips).toBeUndefined();
+    expect(back.reels).toEqual([
+      { name: "Intro – Q&A", ranges: [{ s: 1, e: 5 }, { s: 9.5, e: 12 }] },
+      { name: "a b c", ranges: [{ s: 30, e: 41 }] },
+      { name: "Empty", ranges: [] },
+    ]);
+    expect(decodeReels("10-20")).toEqual([{ name: "Clip 1", ranges: [{ s: 10, e: 20 }] }]);
+    expect(encodeReels([{ name: "x", ranges: [{ s: 1, e: 2 }] }])).toBe("x~1-2");
+  });
+});

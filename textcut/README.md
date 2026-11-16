@@ -16,10 +16,13 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   A cut pause keeps ⚙ *Shortened pause* seconds (default 0.3 s). *Skip cuts* previews
   the edit while playing. Undo/redo with `⌘Z` / `⇧⌘Z`. Edits are saved per transcript
   and go into shared links. They also apply to clips and selections you export.
-- **Clips**: collect selections (`A`), or split a selection at its pauses (`S`, "+ Clips
-  w/o pauses"). Reorder, play them back to back, and copy them as a radiant plan (an
-  `ffmpeg` step), a radiant `trim` step, radiant `clip` steps, an ffmpeg command, CSV,
-  JSON or SRT.
+- **Clips** (e.g. one per reel): a clip is a named list of segments, played and exported
+  back to back. `A` (or "+ Add to clip") adds the selection to the current clip, and `S`
+  adds it with its pauses cut out. **+ New clip** (`N`) starts another one. Click a
+  clip to make it current, and click its name to rename it. Each clip has its own ▶
+  play and **Export…** button, and its segments can be reordered, removed, sorted, split
+  at pauses, or copied as a radiant plan, radiant `trim`/`clip` steps, an ffmpeg command,
+  CSV, JSON or SRT.
 - **Export** the edit, the clips or a selection, with optional **processing**: *crop* to
   9:16 / 1:1 / 4:5… (drag the frame on a preview), *resize*, *reduce noise*, *normalise
   loudness*. *Smooth joins* adds 10 ms audio fades at every cut, so word-level cuts
@@ -78,7 +81,8 @@ host's server. `?…` works too.
 | `title` | display title |
 | `at`    | start position: `83.5` or `1:23.5` |
 | `sel`   | selection to restore: `83.5-91.2` |
-| `clips` | clip list: `10-20.5,30-41` |
+| `clips` | one clip's segments: `10-20.5,30-41` |
+| `reels` | several named clips: `Intro~1-5,9-12\|Q&A~30-41` (name `~` segments, `\|` between clips) |
 | `dw`    | deleted words, by index: `3-5,10` |
 | `dg`    | deleted pauses, by index of the word before them + 1 (`0` = leading silence): `0,14` |
 | `x`     | an export to open on arrival: ranges, format, processing, file name (compressed JSON) |
@@ -127,8 +131,8 @@ run natively with the copied command.
 
 ## Keyboard
 
-`Space` play/pause · `Enter` play selection · `L` loop · `A` add clip · `S` add clips
-without pauses · `C` copy times · `[` / `]` copy IN / OUT · `←/→` previous/next word ·
+`Space` play/pause · `Enter` play selection · `L` loop · `A` add to the current clip ·
+`S` add without pauses · `N` new clip · `C` copy times · `[` / `]` copy IN / OUT · `←/→` previous/next word ·
 `Delete` cut / restore the selected words · `P` shorten pauses in the selection ·
 `Alt+click` a pause to cut / restore it · `⌘Z` / `⇧⌘Z` undo / redo ·
 `Shift+←/→` grow/shrink selection · `Alt+←/→` ±5 s · `/` search (`Enter`/`Shift+Enter`
