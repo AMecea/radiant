@@ -4,9 +4,9 @@
  * filter (libass) renders: real fonts, outlines, boxes, the spoken word highlighted,
  * karaoke fills, pop-in animation.
  *
- * Fonts are open-licensed Google Fonts, fetched from a pinned jsDelivr URL: the
- * browser writes them into ffmpeg.wasm's file system, the shell script and the
- * radiant plan download them next to the captions file (`fontsdir`).
+ * Fonts are open-licensed (OFL), fetched from pinned jsDelivr URLs: the browser
+ * writes them into ffmpeg.wasm's file system, the shell script and the radiant plan
+ * download them next to the captions file (`fontsdir`).
  */
 
 import type { TimeRange } from "./ranges";
@@ -25,14 +25,30 @@ export interface Frame {
 
 // ------------------------------------------------------------------ fonts
 
-const FONT_BASE = "https://cdn.jsdelivr.net/gh/google/fonts@7af0d90b4d532ffa4b041937b560c6df4e7b1e95/ofl/";
+const GOOGLE = "https://cdn.jsdelivr.net/gh/google/fonts@7af0d90b4d532ffa4b041937b560c6df4e7b1e95/ofl/";
+// Inter's static OTFs (4.x ships only woff2, which libass can't count on reading)
+const INTER = "https://cdn.jsdelivr.net/gh/rsms/inter@v3.19/docs/font-files/";
 
-/** ASS font name (the font's family name) → its file under {@link FONT_BASE}. */
-export const FONTS: Record<string, string> = {
-  "Poppins Black": "poppins/Poppins-Black.ttf",
-  "Poppins ExtraBold": "poppins/Poppins-ExtraBold.ttf",
-  "Poppins SemiBold": "poppins/Poppins-SemiBold.ttf",
-  "Anton": "anton/Anton-Regular.ttf",
+interface FontDef {
+  url: string;
+  /**
+   * line height (usWinAscent + usWinDescent) in em. libass sizes text so that this
+   * height equals the ASS font size, so the same size looks very different across
+   * fonts; we size in em and convert.
+   */
+  lh: number;
+  /** average advance of upper / lower-case letters, in em (for line fitting) */
+  upper: number;
+  lower: number;
+}
+
+/** ASS font name (the font's family name) → where to get it and its metrics. */
+export const FONTS: Record<string, FontDef> = {
+  "Inter Black": { url: INTER + "Inter-Black.otf", lh: 1.2102, upper: 0.688, lower: 0.561 },
+  "Poppins Black": { url: GOOGLE + "poppins/Poppins-Black.ttf", lh: 1.762, upper: 0.672, lower: 0.595 },
+  "Poppins ExtraBold": { url: GOOGLE + "poppins/Poppins-ExtraBold.ttf", lh: 1.762, upper: 0.661, lower: 0.586 },
+  "Poppins SemiBold": { url: GOOGLE + "poppins/Poppins-SemiBold.ttf", lh: 1.762, upper: 0.638, lower: 0.568 },
+  "Anton": { url: GOOGLE + "anton/Anton-Regular.ttf", lh: 1.7334, upper: 0.452, lower: 0.444 },
 };
 
 export interface FontFile {
@@ -41,9 +57,11 @@ export interface FontFile {
   url: string;
 }
 
+const fontDef = (name: string): FontDef => FONTS[name] ?? FONTS["Poppins ExtraBold"]!;
+
 export function fontFile(name: string): FontFile {
-  const rel = FONTS[name] ?? FONTS["Poppins ExtraBold"]!;
-  return { file: rel.split("/").pop()!, url: FONT_BASE + rel };
+  const url = fontDef(name).url;
+  return { file: url.split("/").pop()!, url };
 }
 
 // ------------------------------------------------------------------ styles
@@ -56,22 +74,21 @@ type Mode =
 export interface CaptionStyle {
   id: string;
   label: string;
-  font: keyof typeof FONTS;
-  /**
-   * font size, as a fraction of the frame's shorter side. (An ASS font size is the
-   * font's line height — ascender + descender — about 1.4 em for Poppins.)
-   */
+  font: string;
+  /** letter size (em), as a fraction of the frame's shorter side */
   size: number;
   upper: boolean;
   mode: Mode;
   /** words / characters per caption (before the user's override) */
   words: number;
   chars: number;
+  /** lines a caption may take; longer ones get fewer words */
+  lines: number;
   /** drop , . ; : at word ends (keeps ? and !) */
   stripPunct: boolean;
   /** scale-in animation at each caption */
   pop: boolean;
-  /** outline (or box padding) and shadow, fractions of the font size */
+  /** outline (or box padding) and shadow, in em */
   outline: number;
   shadow: number;
   /** text on a translucent box instead of an outline */
@@ -80,24 +97,25 @@ export interface CaptionStyle {
 
 export const CAPTION_STYLES: CaptionStyle[] = [
   {
-    id: "pop", label: "Bold pop — word highlight", font: "Poppins Black", size: 0.14, upper: true,
-    mode: "highlight", words: 3, chars: 16, stripPunct: true, pop: true, outline: 0.1, shadow: 0.05, box: false,
+    id: "pop", label: "Bold pop — word highlight", font: "Poppins Black", size: 0.08, upper: true,
+    mode: "highlight", words: 3, chars: 16, lines: 1, stripPunct: true, pop: true, outline: 0.17, shadow: 0.09, box: false,
   },
   {
-    id: "word", label: "One word at a time", font: "Anton", size: 0.2, upper: true,
-    mode: "plain", words: 1, chars: 14, stripPunct: true, pop: true, outline: 0.08, shadow: 0.04, box: false,
+    id: "word", label: "One word at a time", font: "Anton", size: 0.115, upper: true,
+    mode: "plain", words: 1, chars: 14, lines: 1, stripPunct: true, pop: true, outline: 0.14, shadow: 0.07, box: false,
   },
   {
-    id: "karaoke", label: "Karaoke fill", font: "Poppins ExtraBold", size: 0.1, upper: false,
-    mode: "karaoke", words: 5, chars: 24, stripPunct: false, pop: false, outline: 0.09, shadow: 0.04, box: false,
+    id: "karaoke", label: "Karaoke fill", font: "Poppins ExtraBold", size: 0.057, upper: false,
+    mode: "karaoke", words: 5, chars: 24, lines: 2, stripPunct: false, pop: false, outline: 0.16, shadow: 0.07, box: false,
   },
   {
-    id: "box", label: "Clean subtitles on a box", font: "Poppins SemiBold", size: 0.06, upper: false,
-    mode: "plain", words: 9, chars: 42, stripPunct: false, pop: false, outline: 0.35, shadow: 0, box: true,
+    id: "box", label: "Clean subtitles on a box", font: "Poppins SemiBold", size: 0.034, upper: false,
+    mode: "plain", words: 9, chars: 42, lines: 2, stripPunct: false, pop: false, outline: 0.62, shadow: 0, box: true,
   },
 ];
 
 export const ACCENTS: Array<[string, string]> = [
+  ["#FFB013", "Radiant yellow"],
   ["#FFE11A", "Yellow"],
   ["#3DFF6E", "Green"],
   ["#2EE6FF", "Cyan"],
@@ -108,10 +126,12 @@ export const ACCENTS: Array<[string, string]> = [
 
 export interface CaptionOptions {
   style: string;
+  /** font family (a key of {@link FONTS}); "" = the style's */
+  font: string;
+  /** letter size in % of the frame's shorter side (10 → em = 10% of a 9:16 frame's width); 0 = the style's */
+  size: number;
   /** vertical centre of the captions, 0 (top) … 1 (bottom) */
   y: number;
-  /** size multiplier, 1 = the style's size */
-  scale: number;
   /** accent colour, #RRGGBB */
   accent: string;
   /** max words per caption; 0 = the style's */
@@ -123,7 +143,7 @@ export interface CaptionOptions {
 }
 
 export const CAPTION_DEFAULTS: CaptionOptions = {
-  style: "pop", y: 0.7, scale: 1, accent: "#FFE11A", words: 0, case: "style",
+  style: "pop", font: "Inter Black", size: 10, y: 0.7, accent: "#FFB013", words: 0, case: "style",
 };
 
 export function captionStyle(id: string): CaptionStyle {
@@ -264,24 +284,30 @@ export function captionScript(words: readonly CaptionWord[], ranges: readonly Ti
   const st = captionStyle(opt.style);
   const W = Math.round(frame.width), H = Math.round(frame.height);
   const unit = Math.min(W, H);
-  const size = Math.round(unit * st.size * clamp(Number(opt.scale) || 1, 0.3, 3));
+  const fontName = opt.font && FONTS[opt.font] ? opt.font : st.font;
+  const font = fontDef(fontName);
+  const em = unit * (Number(opt.size) > 0 ? clamp(Number(opt.size), 1, 50) / 100 : st.size);
+  const size = Math.round(em * font.lh); // the ASS size that renders letters `em` tall
   const upper = opt.case === "upper" || (opt.case !== "asis" && st.upper);
   const maxWords = Number(opt.words) > 0 ? Number(opt.words) : st.words;
-  // More words than the style's default → allow proportionally longer lines.
-  const maxChars = Math.max(st.chars, Math.round((st.chars / st.words) * maxWords));
+  const margin = Math.round(W * 0.07);
+  // More words than the style's default → allow proportionally longer captions,
+  // but no more than fits on the style's lines at this size.
+  const perLine = (W - 2 * margin) / (em * (upper ? font.upper : font.lower));
+  const maxChars = Math.max(4, Math.min(Math.max(st.chars, Math.round((st.chars / st.words) * maxWords)),
+    Math.floor(perLine * st.lines)));
   const accent = /^#[0-9a-f]{6}$/i.test(opt.accent) ? opt.accent : CAPTION_DEFAULTS.accent;
 
   const white = assColor("#FFFFFF");
-  const outlineW = Math.max(1, Math.round(size * st.outline));
-  const shadowW = Math.round(size * st.shadow);
-  const margin = Math.round(W * 0.07);
+  const outlineW = Math.max(1, Math.round(em * st.outline));
+  const shadowW = Math.round(em * st.shadow);
   const x = Math.round(W / 2), y = Math.round(H * clamp(Number(opt.y), 0.05, 0.95));
 
   // karaoke: SecondaryColour is the not-yet-sung text, PrimaryColour the sung.
   const primary = st.mode === "karaoke" ? assColor(accent) : white;
   const outlineC = st.box ? assColor("#000000", 0x60) : assColor("#000000");
   const style = [
-    "Cap", st.font, size, primary, white, outlineC, assColor("#000000", 0x80),
+    "Cap", fontName, size, primary, white, outlineC, assColor("#000000", 0x80),
     0, 0, 0, 0, 100, 100, 0, 0, st.box ? 3 : 1, outlineW, shadowW, 5, margin, margin, 0, 1,
   ].join(",");
 
@@ -346,7 +372,7 @@ export function captionScript(words: readonly CaptionWord[], ranges: readonly Ti
     ...events,
     "",
   ].join("\n");
-  return { ass, font: fontFile(st.font), count: chunks.length };
+  return { ass, font: fontFile(fontName), count: chunks.length };
 }
 
 const clamp = (v: number, a: number, b: number) => (Number.isFinite(v) ? Math.min(b, Math.max(a, v)) : a);

@@ -11,7 +11,7 @@
  * font). It gets what it needs to write them from {@link OpEnv}.
  */
 
-import { ACCENTS, CAPTION_STYLES, captionScript, type FontFile } from "./captions";
+import { ACCENTS, CAPTION_DEFAULTS, CAPTION_STYLES, FONTS, captionScript, type FontFile } from "./captions";
 import type { TimeRange } from "./ranges";
 
 export interface Frame {
@@ -151,23 +151,30 @@ export const OPS: OpDef[] = [
     stream: "video",
     fields: [
       { key: "style", label: "Style", type: "select", options: CAPTION_STYLES.map((c) => [c.id, c.label]) },
+      { key: "font", label: "Font", type: "select", options: [["", "Style default"], ...Object.keys(FONTS).map((f): [string, string] => [f, f])] },
+      {
+        key: "size", label: "Size (% of width)", type: "select",
+        options: [["0", "Style default"], ...[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20].map((n): [string, string] => [String(n), String(n)])],
+      },
       { key: "accent", label: "Accent colour", type: "select", options: ACCENTS },
       { key: "y", label: "Position from top", type: "range", min: 5, max: 95, step: 1, unit: "%" },
-      { key: "scale", label: "Size", type: "range", min: 50, max: 200, step: 5, unit: "%" },
       {
         key: "words", label: "Words per caption", type: "select",
         options: [["0", "Style default"], ["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"], ["8", "8"], ["12", "12"]],
       },
       { key: "case", label: "Case", type: "select", options: [["style", "Style default"], ["upper", "UPPER CASE"], ["asis", "As transcribed"]] },
     ],
-    defaults: { style: "pop", accent: "#FFE11A", y: 70, scale: 100, words: "0", case: "style" },
+    defaults: {
+      style: CAPTION_DEFAULTS.style, font: CAPTION_DEFAULTS.font, size: String(CAPTION_DEFAULTS.size),
+      accent: CAPTION_DEFAULTS.accent, y: 70, words: "0", case: "style",
+    },
     build(p, f, env) {
       if (!env?.words?.length) return null;
       const notes: string[] = [];
       if (!f) notes.push("Video size unknown — captions are laid out for 1080×1920 and may look stretched.");
       const frame = f ?? { width: 1080, height: 1920 };
       const cap = captionScript(env.words, env.ranges, frame, {
-        style: String(p.style), accent: String(p.accent), y: Number(p.y) / 100, scale: Number(p.scale) / 100,
+        style: String(p.style), font: String(p.font ?? ""), size: Number(p.size), accent: String(p.accent), y: Number(p.y) / 100,
         words: Number(p.words), case: String(p.case), lang: env.lang,
       });
       if (!cap.count) return null;

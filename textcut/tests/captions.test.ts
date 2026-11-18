@@ -64,10 +64,33 @@ describe("ASS", () => {
   const frame = { width: 1080, height: 1920 };
   const events = (ass: string) => ass.split("\n").filter((l) => l.startsWith("Dialogue:"));
 
+  const own = { font: "", size: 0 }; // the style's font and size
+
+  it("defaults: Inter Black, letters 10% of the width, Radiant yellow", () => {
+    const { ass, font } = captionScript(words, [{ s: 0, e: 6 }], frame);
+    // em = 108 px; libass sizes by line height (1.21 em for Inter) → 131
+    expect(ass).toMatch(/^Style: Cap,Inter Black,131,/m);
+    expect(ass).toContain("{\\1c&H13B0FF&}HELLO");
+    expect(font).toEqual({ file: "Inter-Black.otf", url: "https://cdn.jsdelivr.net/gh/rsms/inter@v3.19/docs/font-files/Inter-Black.otf" });
+  });
+
+  it("sizes letters the same whatever the font's line height", () => {
+    const size = (f: string) => Number(captionScript(words, [{ s: 0, e: 6 }], frame, { font: f, size: 10 })
+      .ass.match(/^Style: Cap,[^,]+,(\d+),/m)![1]);
+    expect(size("Inter Black")).toBe(131);   // 108 × 1.21
+    expect(size("Poppins Black")).toBe(190); // 108 × 1.76
+  });
+
+  it("fits captions on the style's lines at big sizes", () => {
+    // bold pop is one line: at 20% of the width only a word or two fit
+    const n = (size: number) => captionScript(words, [{ s: 0, e: 6 }], frame, { size }).count;
+    expect(n(20)).toBeGreaterThan(n(8));
+  });
+
   it("lays the script out in the frame's pixels, with the style's font", () => {
-    const { ass, font, count } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "pop", y: 0.7 });
+    const { ass, font, count } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "pop", y: 0.7, ...own });
     expect(ass).toContain("PlayResX: 1080\nPlayResY: 1920");
-    expect(ass).toMatch(/^Style: Cap,Poppins Black,151,/m); // 14% of 1080
+    expect(ass).toMatch(/^Style: Cap,Poppins Black,152,/m); // em 8% of 1080 × 1.76
     expect(ass).toContain("\\an5\\pos(540,1344)");
     expect(font.file).toBe("Poppins-Black.ttf");
     expect(font.url).toMatch(/^https:\/\/cdn\.jsdelivr\.net\/gh\/google\/fonts@[0-9a-f]{40}\/ofl\/poppins\/Poppins-Black\.ttf$/);
@@ -75,7 +98,7 @@ describe("ASS", () => {
   });
 
   it("highlights the spoken word, one event per word, back to back", () => {
-    const { ass } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "pop", accent: "#3DFF6E" });
+    const { ass } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "pop", accent: "#3DFF6E", ...own });
     const ev = events(ass);
     expect(ev).toHaveLength(5);
     expect(ev[0]).toContain("{\\1c&H6EFF3D&}HELLO{\\1c&HFFFFFF&} THERE");
@@ -91,7 +114,7 @@ describe("ASS", () => {
   });
 
   it("karaoke: one event per caption, \\kf per word with the gaps as \\k", () => {
-    const { ass } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "karaoke" });
+    const { ass } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "karaoke", accent: "#FFE11A", ...own });
     const ev = events(ass);
     expect(ev[0]).toContain("{\\kf40}Hello {\\k10}{\\kf40}there,");
     // the sung colour is the accent; the unsung (secondary) white
@@ -99,16 +122,16 @@ describe("ASS", () => {
   });
 
   it("box style: an opaque box (BorderStyle 3), sentence case kept", () => {
-    const { ass } = captionScript(words, [{ s: 0, e: 6 }], { width: 1920, height: 1080 }, { style: "box" });
+    const { ass } = captionScript(words, [{ s: 0, e: 6 }], { width: 1920, height: 1080 }, { style: "box", ...own });
     expect(ass).toMatch(/^Style: Cap,Poppins SemiBold,65,(&H[0-9A-F]{8},){4}0,0,0,0,100,100,0,0,3,/m);
     expect(events(ass)[0]).toContain("Hello there, general Kenobi.");
   });
 
   it("options: words per caption, case, size", () => {
-    const { ass } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "box", words: 1, case: "upper", scale: 2 });
+    const { ass } = captionScript(words, [{ s: 0, e: 6 }], frame, { style: "box", words: 1, case: "upper", font: "", size: 8 });
     expect(events(ass)).toHaveLength(5);
     expect(events(ass)[0]).toMatch(/}HELLO$/);
-    expect(ass).toMatch(/^Style: Cap,Poppins SemiBold,130,/m);
+    expect(ass).toMatch(/^Style: Cap,Poppins SemiBold,152,/m);
   });
 
   it("upper-cases with the transcript's language and escapes override braces", () => {
@@ -146,7 +169,7 @@ describe("captions in the ffmpeg job", () => {
     expect(job.files).toHaveLength(1);
     expect(job.files[0]!.path).toBe("textcut_captions.ass");
     expect(job.files[0]!.text).toContain("PlayResX: 608\nPlayResY: 1080");
-    expect(job.fonts?.map((f) => f.file)).toEqual(["Poppins-Black.ttf"]);
+    expect(job.fonts?.map((f) => f.file)).toEqual(["Inter-Black.otf"]);
     expect(job.temps).toContain("textcut_captions.ass");
     expect(job.requires).toEqual(["ass"]);
   });
@@ -155,7 +178,7 @@ describe("captions in the ffmpeg job", () => {
     const sh = jobToShell(buildJob(spec));
     expect(sh).toMatch(/^set -e\n/);
     expect(sh).toContain("grep -q ' ass ' || { echo");
-    expect(sh).toContain("mkdir -p textcut_fonts\n[ -s textcut_fonts/Poppins-Black.ttf ] || curl -fsSL -o textcut_fonts/Poppins-Black.ttf https://");
+    expect(sh).toContain("mkdir -p textcut_fonts\n[ -s textcut_fonts/Inter-Black.otf ] || curl -fsSL -o textcut_fonts/Inter-Black.otf https://");
     expect(sh).toContain("cat > textcut_captions.ass <<'EOF'\n[Script Info]");
     expect(sh).toMatch(/rm -f textcut_captions\.ass$/);
   });

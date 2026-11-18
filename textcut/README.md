@@ -44,9 +44,11 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   uses an ASS script rendered by libass (ffmpeg's `ass` filter). There are four styles:
   *Bold pop* (2–3 upper-case words, the spoken word in the accent colour, a scale-in pop),
   *One word at a time*, *Karaoke fill* (words fill with colour as they're spoken), and
-  *Clean subtitles on a box*. You can also set the accent colour, position, size, words
-  per caption and case. The fonts are open-licensed Google Fonts (Poppins, Anton) from a
-  pinned jsDelivr URL. **▶ Preview** renders 5 seconds of the export, captions and all,
+  *Clean subtitles on a box*. You can also set the font, size, accent colour, position,
+  words per caption and case. The defaults are Inter Black, size 10 and Radiant yellow
+  (`#FFB013`). Size is the letter size as a % of the frame's shorter side,
+  so 10 means letters 10% of a 9:16 reel's width, whatever the font. The fonts are
+  open-licensed (Inter, Poppins, Anton) and come from pinned jsDelivr URLs. **▶ Preview** renders 5 seconds of the export, captions and all,
   through the same job, and plays it in the dialog.
   - In the browser, ffmpeg.wasm already has libass.
   - A native ffmpeg needs libass too: on macOS `brew install ffmpeg-full`, because
