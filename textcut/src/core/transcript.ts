@@ -195,6 +195,7 @@ export function textOf(words: readonly Word[], a: number, b: number): string {
   let out = "";
   for (let i = Math.min(a, b); i <= Math.max(a, b); i++) {
     const w = words[i]!.w;
+    if (!w) continue; // merged into a neighbour by a spelling fix
     out += out && !gluesToPrev(w) ? " " + w : w;
   }
   return out;
@@ -207,4 +208,48 @@ function num(x: unknown): number {
 
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null;
+}
+
+/** How the editor breaks the transcript into lines. */
+export type LineMode =
+  | "seg"       // the transcript's own segments
+  | "sentence"  // at sentence ends
+  | number;     // at sentence ends, and at most this many words per line
+
+export interface Line {
+  /** inclusive word-index range */
+  first: number;
+  last: number;
+}
+
+const SENTENCE_END = /[.?!…]["'»”)\]]*$/;
+
+export function parseLineMode(v: unknown): LineMode {
+  if (v === "sentence") return "sentence";
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : "seg";
+}
+
+/**
+ * Lines of the transcript. With a word limit, a long sentence is split into
+ * lines of about equal length (22 words at 10 → 8 + 7 + 7, not 10 + 10 + 2).
+ */
+export function transcriptLines(t: Pick<Transcript, "segments">, words: readonly Word[], mode: LineMode): Line[] {
+  if (mode === "seg") return t.segments.map((s) => ({ first: s.first, last: s.last }));
+  const out: Line[] = [];
+  const max = mode === "sentence" ? Infinity : Math.max(1, mode);
+  let start = 0;
+  const flush = (end: number) => {
+    const len = end - start + 1;
+    const k = Math.max(1, Math.ceil(len / max));
+    for (let j = 0; j < k; j++) {
+      const a = start + Math.floor((j * len) / k), b = start + Math.floor(((j + 1) * len) / k) - 1;
+      if (b >= a) out.push({ first: a, last: b });
+    }
+    start = end + 1;
+  };
+  for (let i = 0; i < words.length; i++) {
+    if (SENTENCE_END.test(words[i]!.w) || i === words.length - 1) flush(i);
+  }
+  return out;
 }

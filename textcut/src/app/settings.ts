@@ -25,6 +25,8 @@ export interface Settings {
   exportMode: string;
   /** commands use $INPUT/$OUTPUT and radiant vars instead of the literal URL */
   useVars: boolean;
+  /** transcript lines: "seg" (as transcribed), "sentence", or max words per line */
+  lineMode: string;
 }
 
 const DEFAULTS: Settings = {
@@ -41,6 +43,7 @@ const DEFAULTS: Settings = {
   ops: [],
   exportMode: "",
   useVars: false,
+  lineMode: "seg",
 };
 
 const KEY = "textcut.settings.v1";

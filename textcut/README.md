@@ -16,6 +16,17 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   A cut pause keeps ⚙ *Shortened pause* seconds (default 0.3 s). *Skip cuts* previews
   the edit while playing. Undo/redo with `⌘Z` / `⇧⌘Z`. Edits are saved per transcript
   and go into shared links. They also apply to clips and selections you export.
+- **Fix misheard words**: select words (or click one) and press `E`, or use *✎ Fix
+  text*. Type the correction, then press `Enter` (or `Esc` to cancel). An empty field
+  goes back to the transcribed text. Each word keeps its timing. Typing more or fewer
+  words than you selected spreads them over the old timings, so typing "Kenobi" over
+  "Ken obi" merges the two. Fixes are underlined, and hovering shows the original. They
+  show up in search, copied text, SRT and burned-in captions. They're saved with your
+  edits, can be undone, and travel in shared links (`fx`).
+- **Lines**: the control above the transcript sets how the text is broken into lines.
+  *As transcribed* uses the JSON's segments, *Sentences* breaks at sentence ends, and
+  *Sentences, ≤ N words* also splits long sentences into even lines of at most N words.
+  This only changes the display.
 - **Clips** (e.g. one per reel): a clip is a named list of segments, played and exported
   back to back. `A` (or "+ Add to clip") adds the selection to the current clip, and `S`
   adds it with its pauses cut out. **+ New clip** (`N`) starts another one. Click a
@@ -102,6 +113,7 @@ host's server. `?…` works too.
 | `reels` | several named clips: `Intro~1-5,9-12\|Q&A~30-41` (name `~` segments, `\|` between clips) |
 | `dw`    | deleted words, by index: `3-5,10` |
 | `dg`    | deleted pauses, by index of the word before them + 1 (`0` = leading silence): `0,14` |
+| `fx`    | spelling fixes, `index~text` joined by `\|`: `3~Kenobi\|10~two words` |
 | `x`     | an export to open on arrival: ranges, format, processing, file name (compressed JSON) |
 
 ```

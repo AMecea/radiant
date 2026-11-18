@@ -15,6 +15,7 @@ import type { TimeRange } from "./ranges";
  *   at     start position, seconds or clock time
  *   dw     deleted words, by index: "3-5,10"
  *   dg     deleted pauses, by (index of the word before them) + 1: "0,14"
+ *   fx     spelling fixes: "3~Kenobi|10~two words" (index ~ text, "|" between)
  *   x      an export to open on arrival (ranges, format, processing), packed:
  *          see {@link ExportPreset}
  */
@@ -30,6 +31,7 @@ export interface LinkParams {
   at?: number;
   dw?: string;
   dg?: string;
+  fx?: string;
   x?: string;
 }
 
@@ -67,9 +69,10 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   if (media) out.media = media;
   if (tx) out.tx = tx;
   if (title) out.title = title;
-  const dw = get("dw"), dg = get("dg");
+  const dw = get("dw"), dg = get("dg"), fx = get("fx");
   if (dw) out.dw = dw;
   if (dg) out.dg = dg;
+  if (fx) out.fx = fx;
   const x = get("x");
   if (x) out.x = x;
   const clips = get("clips");
@@ -98,6 +101,7 @@ export function buildLink(base: string, p: LinkParams): string {
   if (p.at != null) h.set("at", String(+p.at.toFixed(3)));
   if (p.dw) h.set("dw", p.dw);
   if (p.dg) h.set("dg", p.dg);
+  if (p.fx) h.set("fx", p.fx);
   if (p.x) h.set("x", p.x);
   if (p.tx) h.set("tx", p.tx); // last: it's the long one
   const frag = h.toString().replace(/%2F/gi, "/").replace(/%3A/gi, ":").replace(/%2C/gi, ",");

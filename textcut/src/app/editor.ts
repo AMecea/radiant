@@ -1,10 +1,12 @@
-import { gluesToPrev, textOf, wordAt, compactTranscript, type Transcript, type Word } from "../core/transcript";
+import {
+  gluesToPrev, parseLineMode, textOf, transcriptLines, wordAt, compactTranscript, type Transcript, type Word,
+} from "../core/transcript";
 import { findPauses, mergeRanges, rangeOf, splitAtPauses, wordsIn, type Pause, type TimeRange, type WordRange } from "../core/ranges";
 import { buildSearchIndex, search, type SearchIndex } from "../core/search";
 import { fmtDur, fmtShort, fmtTime } from "../core/time";
 import { CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
 import {
-  hasEdits, packEdits, rangeAt, removedRanges, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
+  encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
 import { copyText, h, isTyping, modal, toast } from "./dom";
@@ -57,6 +59,10 @@ export class Editor {
   private txPacked: Promise<string> | null = null;
 
   // text edits
+  /** the words as transcribed (this.words carry the spelling fixes) */
+  private origW: string[];
+  /** spelling fixes: word index → corrected text */
+  private fixes = new Map<number, string>();
   private delWords = new Set<number>();
   private delGaps = new Set<number>();
   /** time ranges the edits remove (sorted, merged) */
@@ -85,6 +91,7 @@ export class Editor {
   constructor(private init: EditorInit) {
     this.t = init.loaded.transcript;
     this.words = this.t.words;
+    this.origW = this.words.map((w) => w.w);
     this.media = init.media;
     this.duration = this.t.duration;
     this.index = buildSearchIndex(this.words);
@@ -165,7 +172,17 @@ export class Editor {
       : null;
 
     const left = h("section", { class: "left" }, this.playerBox, transport, this.timeline.el, this.selBar, this.editsEl, this.clipsEl);
-    const right = h("section", { class: "right" }, approx, this.trEl);
+    const lineSel = h("select", {
+      "aria-label": "Transcript lines", title: "How the transcript is broken into lines (the export isn't affected)",
+      onchange: () => { s.lineMode = lineSel.value; saveSettings(s); this.renderTranscript(); },
+    }, ...[["seg", "As transcribed"], ["sentence", "Sentences"],
+           ...[5, 8, 10, 12, 15, 20, 30].map((n) => [String(n), `Sentences, ≤ ${n} words`])]
+      .map(([v, l]) => h("option", { value: v, selected: s.lineMode === v }, l)));
+    const trBar = h("div", { class: "tr-bar" },
+      h("label", { class: "inline" }, "Lines", lineSel),
+      h("span", { class: "spacer" }),
+      h("span", { class: "muted" }, h("kbd", {}, "E"), " fixes a misheard word — select it, or click it first"));
+    const right = h("section", { class: "right" }, approx, trBar, this.trEl);
     const root = h("div", { class: "app editor-view" }, top, h("main", { class: "editor" }, left, right));
 
     this.trEl.addEventListener("mouseup", (e) => this.onTranscriptMouseUp(e));
@@ -395,15 +412,19 @@ export class Editor {
       `<span class="pause${p.d >= 2 ? " long" : ""}${this.delGaps.has(p.after) ? " del" : ""}" data-pause="${p.after}" contenteditable="false" ` +
       `title="${p.d.toFixed(2)}s pause · click: play around it · Alt+click: delete / restore">${p.d.toFixed(1)}s</span>`;
     const lead = pauseAfter.get(-1);
-    for (const [si, sg] of this.t.segments.entries()) {
-      html.push(`<p class="seg" data-seg="${si}"><button class="ts mono" data-t="${sg.s}" tabindex="-1" ` +
-                `title="Jump to ${fmtTime(sg.s)}">${fmtShort(sg.s)}</button><span class="txt">`);
+    const lines = transcriptLines(this.t, this.words, parseLineMode(this.settings.lineMode));
+    for (const [si, sg] of lines.entries()) {
+      const t0 = this.words[sg.first]!.s;
+      html.push(`<p class="seg" data-seg="${si}"><button class="ts mono" data-t="${t0}" tabindex="-1" ` +
+                `title="Jump to ${fmtTime(t0)}">${fmtShort(t0)}</button><span class="txt">`);
       if (si === 0 && lead) html.push(pauseHtml(lead), " ");
       for (let i = sg.first; i <= sg.last; i++) {
         const w = this.words[i]!;
-        const low = w.p != null && w.p < 0.5 ? " low" : "";
+        const low = w.p != null && w.p < 0.5 && !this.fixes.has(i) ? " low" : "";
         const del = this.delWords.has(i) ? " del" : "";
-        html.push(`<span class="w${low}${del}" data-i="${i}">${esc(w.w)}</span>`);
+        const fix = this.fixes.has(i)
+          ? ` fixed${w.w ? "" : " empty"}" title="was “${esc(this.origW[i]!)}” · E to edit` : "";
+        html.push(`<span class="w${low}${del}${fix}" data-i="${i}">${esc(w.w)}</span>`);
         const p = pauseAfter.get(i);
         const next = i < sg.last ? this.words[i + 1]!.w : "";
         html.push(p ? ` ${pauseHtml(p)} ` : next && gluesToPrev(next) ? "" : " ");
@@ -416,6 +437,80 @@ export class Editor {
     this.paintSel();
     this.paintClips();
     this.paintHits();
+  }
+
+  // ======================================================== spelling fixes
+
+  /** Put the spelling fixes into the words, and everything derived from their text. */
+  private applyFixes(): void {
+    for (const [i, w] of this.words.entries()) w.w = this.fixes.get(i) ?? this.origW[i]!;
+    this.index = buildSearchIndex(this.words);
+    this.txPacked = null;
+    for (const r of this.reels) for (const p of r.parts) p.text = this.textIn(p);
+    if (this.trEl.childElementCount) this.renderTranscript();
+    if (this.clipsEl.childElementCount) this.renderClips();
+    if (this.searchInput.value) this.runSearch();
+    this.renderSelBar();
+  }
+
+  /** Edit the selection's text — or the current word's. */
+  private editSelWords(): void {
+    const r = this.sel ?? (this.cur >= 0 ? { a: this.cur, b: this.cur } : null);
+    if (!r) { toast("Select a word (or click one) to fix it", "info"); return; }
+    if (r.b - r.a >= 40) { toast("Select at most 40 words to fix at a time", "info"); return; }
+    this.editWords(r.a, r.b);
+  }
+
+  /** An input in place of words a..b; Enter saves, Esc cancels. */
+  private editWords(a: number, b: number): void {
+    const els = this.wordEls.slice(a, b + 1);
+    if (!els.length || this.trEl.querySelector(".w-edit")) return;
+    if (!this.video.paused) this.video.pause();
+    const text = textOf(this.words, a, b);
+    const input = h("input", {
+      class: "w-edit", value: text, spellcheck: true, "aria-label": "Corrected text",
+      title: "Enter: save · Esc: cancel · empty: back to the transcribed text",
+    });
+    const fit = () => { input.style.width = `${Math.max(4, input.value.length + 2)}ch`; };
+    fit();
+    els.forEach((el) => { el.hidden = true; });
+    els[0]!.before(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (save: boolean) => {
+      if (done) return;
+      done = true;
+      input.remove();
+      els.forEach((el) => { el.hidden = false; });
+      this.trEl.focus({ preventScroll: true });
+      if (save) this.setWordText(a, b, input.value);
+    };
+    input.addEventListener("input", fit);
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  /**
+   * New text for words a..b. The timings stay; the text is spread over the words
+   * (see spreadText). Empty → back to what was transcribed.
+   */
+  private setWordText(a: number, b: number, value: string): void {
+    const v = value.replace(/\s+/g, " ").trim();
+    if (v === textOf(this.words, a, b)) return;
+    const texts = v ? spreadText(v, b - a + 1) : this.origW.slice(a, b + 1);
+    this.snapshot();
+    texts.forEach((t, k) => {
+      const i = a + k;
+      if (t === this.origW[i]) this.fixes.delete(i); else this.fixes.set(i, t);
+    });
+    this.applyFixes();
+    this.editsChanged();
+    toast(v ? `Fixed: “${oneLine(v, 50)}”` : "Back to the transcribed text", "info");
   }
 
   /** Don't yank the view back to the playing word while the user reads elsewhere. */
@@ -457,7 +552,8 @@ export class Editor {
     if (this.media && this.video.paused && e.detail === 2) void this.video.play(); // double-click plays
   }
 
-  private onTranscriptMouseUp(_e: MouseEvent): void {
+  private onTranscriptMouseUp(e: MouseEvent): void {
+    if ((e.target as HTMLElement).closest?.(".w-edit")) return;
     const ds = window.getSelection();
     if (!ds || ds.isCollapsed || !ds.rangeCount) return;
     const r = ds.getRangeAt(0);
@@ -530,7 +626,7 @@ export class Editor {
       bar.classList.remove("active");
       bar.append(h("p", { class: "hint" },
         "Select words to cut — drag across the text (or the timeline). Click a word to jump, ",
-        h("kbd", {}, "Shift"), "+click to extend, double-click to play."));
+        h("kbd", {}, "Shift"), "+click to extend, double-click to play. ", h("kbd", {}, "E"), " fixes a misheard word."));
       return;
     }
     bar.classList.add("active");
@@ -556,6 +652,7 @@ export class Editor {
         this.loopBtn,
         h("button", { title: "Copy “start ⇥ end” (C)", onclick: () => this.copySelRange() }, "Copy times"),
         h("button", { title: "Copy the selected text", onclick: () => void copyText(text, "Text") }, "Copy text"),
+        h("button", { title: "Correct the spelling of the selected words (E)", onclick: () => this.editSelWords() }, "✎ Fix text"),
         h("button", { title: "Link that opens on this selection", onclick: () => void this.copyLink(true) }, "🔗 Link"),
         h("span", { class: "spacer" }),
         h("button", { title: `Add to ${this.reels[this.active]?.name ?? "a new clip"} (A)`, onclick: () => this.addSelAsClip(false) }, "+ Add to clip"),
@@ -603,7 +700,8 @@ export class Editor {
 
   private get clipsKey(): string {
     const w = this.words;
-    const sig = `${w.length}|${w.slice(0, 30).map((x) => x.w).join(" ")}|${w[w.length - 1]?.e ?? 0}`;
+    // From the words as transcribed, so spelling fixes don't move the saved state.
+    const sig = `${w.length}|${this.origW.slice(0, 30).join(" ")}|${w[w.length - 1]?.e ?? 0}`;
     let hsh = 0;
     for (let i = 0; i < sig.length; i++) hsh = (Math.imul(31, hsh) + sig.charCodeAt(i)) | 0;
     return `textcut.clips.${(hsh >>> 0).toString(36)}`;
@@ -909,7 +1007,11 @@ export class Editor {
     else if (this.media) warnings.push(`The media is a local file (${this.media.name}) — whoever opens the link will be asked to pick it.`);
     const o = this.init.loaded.origin;
     if (o.kind === "url") p.words = o.url;
-    else p.tx = await (this.txPacked ??= packJson(compactTranscript(this.t)));
+    else {
+      // as transcribed: the fixes travel separately (fx), like the cuts
+      const orig = { ...this.t, words: this.words.map((w, i) => ({ ...w, w: this.origW[i]! })) };
+      p.tx = await (this.txPacked ??= packJson(compactTranscript(orig)));
+    }
     const reels = this.reels.filter((r) => r.parts.length);
     if (reels.length) p.reels = reels.map((r) => ({ name: r.name, ranges: r.parts }));
     Object.assign(p, packEdits(this.edits));
@@ -949,7 +1051,7 @@ export class Editor {
   // ======================================================== text edits
 
   private get edits(): Edits {
-    return { words: this.delWords, gaps: this.delGaps };
+    return { words: this.delWords, gaps: this.delGaps, fixes: this.fixes };
   }
 
   private get cutParams(): CutParams {
@@ -961,11 +1063,13 @@ export class Editor {
   }
 
   private restoreEdits(): void {
-    const { dw, dg } = this.init.link;
-    const packed = dw || dg ? { dw, dg } : loadJson<PackedEdits>(this.editsKey);
+    const { dw, dg, fx } = this.init.link;
+    const packed = dw || dg || fx ? { dw, dg, fx } : loadJson<PackedEdits>(this.editsKey);
     const ed = unpackEdits(packed, this.words.length);
     this.delWords = new Set(ed.words);
     this.delGaps = new Set(ed.gaps);
+    this.fixes = ed.fixes;
+    this.applyFixes();
     this.editsChanged(false);
   }
 
@@ -1038,6 +1142,9 @@ export class Editor {
     const ed = unpackEdits(st, this.words.length);
     this.delWords = new Set(ed.words);
     this.delGaps = new Set(ed.gaps);
+    const fixesChanged = encodeFixes(ed.fixes) !== encodeFixes(this.fixes);
+    this.fixes = ed.fixes;
+    if (fixesChanged) this.applyFixes();
     this.editsChanged();
     toast(redo ? "Redone" : "Undone", "info");
   }
@@ -1237,6 +1344,7 @@ export class Editor {
       ["S", "Add selection to the clip, without its pauses"], ["C", "Copy selection times"],
       ["[  ]", "Copy start / end time"], ["/", "Search"], ["Enter / Shift+Enter (in search)", "Next / previous match"],
       ["Delete / Backspace", "Cut the selected words (again: restore)"],
+      ["E", "Fix the spelling of the selection (or the current word)"],
       ["P", "Shorten the pauses in the selection"], ["Alt+click pause", "Cut / restore that pause"],
       ["⌘Z / Ctrl+Z", "Undo an edit"], ["⇧⌘Z / Ctrl+Y", "Redo"],
       ["Esc", "Clear selection / stop looping"],
@@ -1287,6 +1395,7 @@ export class Editor {
         case "n": case "N": this.newReel(); break;
         case "s": case "S": this.addSelAsClip(true); break;
         case "c": case "C": this.copySelRange(); break;
+        case "e": case "E": e.preventDefault(); this.editSelWords(); break;
         case "Delete": case "Backspace": if (this.sel) { e.preventDefault(); this.deleteSel(); } break;
         case "p": case "P": if (this.sel) this.toggleGaps(this.selPauses()); break;
         case "[": if (this.sel) void copyText(fmtTime(this.selRange().s, st), "Start"); break;

@@ -14,6 +14,8 @@ import { mergeRanges, type TimeRange } from "./ranges";
 export interface Edits {
   words: ReadonlySet<number>;
   gaps: ReadonlySet<number>;
+  /** corrected spellings: word index → text (the timing stays the word's) */
+  fixes?: ReadonlyMap<number, string>;
 }
 
 export interface CutParams {
@@ -140,17 +142,55 @@ export function decodeIdx(s: string): number[] {
 export interface PackedEdits {
   dw?: string;
   dg?: string;
+  /** spelling fixes, see {@link encodeFixes} */
+  fx?: string;
 }
 
 export function packEdits(ed: Edits): PackedEdits {
   const out: PackedEdits = {};
   if (ed.words.size) out.dw = encodeIdx(ed.words);
   if (ed.gaps.size) out.dg = encodeIdx([...ed.gaps].map((g) => g + 1));
+  if (ed.fixes?.size) out.fx = encodeFixes(ed.fixes);
   return out;
 }
 
-export function unpackEdits(p: PackedEdits | null | undefined, nWords: number): Edits {
+export function unpackEdits(p: PackedEdits | null | undefined, nWords: number): Edits & { fixes: Map<number, string> } {
   const words = new Set(decodeIdx(p?.dw ?? "").filter((i) => i < nWords));
   const gaps = new Set(decodeIdx(p?.dg ?? "").map((g) => g - 1).filter((g) => g < nWords));
-  return { words, gaps };
+  const fixes = new Map([...decodeFixes(p?.fx ?? "")].filter(([i]) => i < nWords));
+  return { words, gaps, fixes };
+}
+
+// ------------------------------------------------------------ spelling fixes
+
+// "~" separates an index from its text, "|" separates entries; both (and "%")
+// are percent-escaped inside the text, everything else is left as typed.
+const escFix = (s: string) => s.replace(/[%|~]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+
+/** {3 → "Kenobi", 10 → "a|b"} → "3~Kenobi|10~a%7Cb" */
+export function encodeFixes(fixes: ReadonlyMap<number, string>): string {
+  return [...fixes].sort(([a], [b]) => a - b).map(([i, t]) => `${i}~${escFix(t)}`).join("|");
+}
+
+export function decodeFixes(s: string): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const part of s ? s.split("|") : []) {
+    const k = part.indexOf("~");
+    const i = Number(part.slice(0, k));
+    if (k < 1 || !Number.isInteger(i) || i < 0) continue;
+    try { out.set(i, decodeURIComponent(part.slice(k + 1))); } catch { out.set(i, part.slice(k + 1)); }
+  }
+  return out;
+}
+
+/**
+ * New text typed over `n` words → one text per word. The same number of words
+ * maps one to one; otherwise the words are spread evenly over the old timings
+ * (fewer words than before leaves some empty: they're merged into a neighbour).
+ */
+export function spreadText(text: string, n: number): string[] {
+  const toks = text.trim().split(/\s+/).filter(Boolean);
+  const m = toks.length;
+  if (m === n) return toks;
+  return Array.from({ length: n }, (_, k) => toks.slice(Math.floor((k * m) / n), Math.floor(((k + 1) * m) / n)).join(" "));
 }
