@@ -50,6 +50,7 @@ export class FFmpegWorker {
   writeFile(path: string, data: Uint8Array | string) { return this.call<void>("writeFile", { path, data }); }
   readFile(path: string) { return this.call<Uint8Array>("readFile", { path }); }
   deleteFile(path: string) { return this.call<void>("deleteFile", { path }); }
+  mkdir(path: string) { return this.call<void>("mkdir", { path }); }
   mountFiles(dir: string, files: File[]) { return this.call<void>("mountFiles", { dir, files }); }
   mountUrl(dir: string, name: string, url: string, size: number) { return this.call<void>("mountUrl", { dir, name, url, size }); }
   unmount(dir: string) { return this.call<void>("unmount", { dir }); }

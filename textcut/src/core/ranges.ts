@@ -90,3 +90,21 @@ export function wordsIn(words: readonly Word[], s: number, e: number): WordRange
   }
   return a < 0 ? null : { a, b };
 }
+
+/**
+ * The part of a cut (ranges played back to back) between output times `from` and
+ * `from + dur`, as source ranges — e.g. a few seconds of it, for a preview render.
+ */
+export function sliceOutput(ranges: readonly TimeRange[], from: number, dur: number): TimeRange[] {
+  const out: TimeRange[] = [];
+  const end = from + dur;
+  let t = 0;
+  for (const r of ranges) {
+    const d = r.e - r.s;
+    const a = Math.max(from, t), b = Math.min(end, t + d);
+    if (b - a > 0.001) out.push({ s: r.s + (a - t), e: r.s + (b - t) });
+    t += d;
+    if (t >= end) break;
+  }
+  return out;
+}

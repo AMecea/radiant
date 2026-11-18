@@ -366,3 +366,7 @@ details summary { cursor: pointer; color: var(--muted); }
   .doc-title strong { max-width: 60vw; }
   .top-actions { margin-left: auto; }
 }
+.cap-preview-box { display: flex; flex-direction: column; gap: 8px; }
+.cap-preview-box .inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.cap-preview-box .num { width: 5em; }
+.cap-preview { display: block; max-width: 100%; max-height: 360px; align-self: center; border-radius: 6px; background: #000; }

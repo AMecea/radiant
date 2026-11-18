@@ -15,6 +15,7 @@
  */
 
 import type { TimeRange } from "../core/ranges";
+import type { FontFile } from "../core/captions";
 import { buildJob, type CutSpec } from "../core/ffjob";
 import { encodeWav, parseWavHeader, pcmToFloat, wavByteRange } from "../core/wav";
 import { fmtBytes } from "./dom";
@@ -121,9 +122,27 @@ async function getFFmpeg(progress: Progress): Promise<FFmpegWorker> {
   }
 }
 
+/** Font bytes, fetched once per page. */
+const fontCache = new Map<string, Promise<Uint8Array>>();
+
+function fetchFont(f: FontFile): Promise<Uint8Array> {
+  let p = fontCache.get(f.url);
+  if (!p) {
+    p = fetch(f.url).then(async (res) => {
+      if (!res.ok) throw new Error(`Couldn't download the font ${f.file}: HTTP ${res.status}`);
+      return new Uint8Array(await res.arrayBuffer());
+    });
+    p.catch(() => fontCache.delete(f.url));
+    fontCache.set(f.url, p);
+  }
+  return p;
+}
+
+const FONTS_DIR = "/fonts";
+
 export interface RunCut {
   /** the cut, minus input/output names (those depend on where it runs) */
-  spec: Omit<CutSpec, "input" | "output" | "tmp">;
+  spec: Omit<CutSpec, "input" | "output" | "tmp" | "fontsDir">;
   ext: string;
   progress: Progress;
   log?: (line: string) => void;
@@ -179,8 +198,13 @@ export async function runCut(src: MediaSource, o: RunCut): Promise<{ blob: Blob;
       }
     }
 
-    const job = buildJob({ ...o.spec, input, output: `/out${runSeq}.${o.ext}`, tmp: `/tmp${runSeq}_` });
+    const job = buildJob({ ...o.spec, input, output: `/out${runSeq}.${o.ext}`, tmp: `/tmp${runSeq}_`, fontsDir: FONTS_DIR });
     for (const n of job.notes) o.log?.(`[textcut] ${n}`);
+    if (job.fonts?.length) {
+      progress("Loading fonts…");
+      await ff.mkdir(FONTS_DIR);
+      for (const f of job.fonts) await ff.writeFile(`${FONTS_DIR}/${f.file}`, await fetchFont(f));
+    }
     for (const f of job.files) await ff.writeFile(f.path, f.text);
     cleanup.push(async () => {
       for (const p of [...job.temps, ...job.files.map((f) => f.path)]) await ff.deleteFile(p).catch(() => {});

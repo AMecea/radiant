@@ -3,6 +3,7 @@
  * then run it in the browser, copy the equivalent ffmpeg command or radiant plan,
  * or copy a link that opens this same export for someone else.
  * The command, the plan and the in-browser run come from the same job (core/ffjob.ts).
+ * Captions get a "preview": a few seconds rendered through that same job.
  */
 
 import type { Clip } from "../core/formats";
@@ -10,6 +11,7 @@ import { buildJob, jobToShell, outputExt, type AudioCodec, type CutMode, type Cu
 import type { ExportPreset } from "../core/link";
 import { radiantPlan } from "../core/radiant";
 import { cropRect, normalizeOps, opDef, OPS, type Field, type Frame, type OpState } from "../core/ops";
+import { sliceOutput } from "../core/ranges";
 import { fmtDur } from "../core/time";
 import { copyText, download, fmtBytes, h, modal, toast } from "./dom";
 import { exportWav, runCut } from "./export";
@@ -30,6 +32,10 @@ export interface ExportContext {
   /** default output name (without extension); `<stem>_cut` otherwise */
   fileName?: string;
   settings: Settings;
+  /** the transcript's words (source time), for captions */
+  words?: ReadonlyArray<{ s: number; e: number; w: string }>;
+  /** transcript language */
+  lang?: string;
   /** opened from a shared link: its format & processing (the user's settings stay untouched) */
   preset?: ExportPreset | null;
   /** a link that opens the editor on this export */
@@ -78,6 +84,9 @@ export function openExportDialog(ctx: ExportContext): void {
     { id: "m4a", label: "M4A (AAC) audio", cut: "audio", codec: "aac", video: false, audio: true, note: "re-encoded" },
     { id: "mp3", label: "MP3 audio", cut: "audio", codec: "mp3", video: false, audio: true, note: "re-encoded" },
   ];
+  /** the running export or preview */
+  let ac: AbortController | null = null;
+  const previewBtns = new Set<HTMLButtonElement>();
   let mode: ModeDef = modes.find((m) => m.id === (preset?.m ?? s.exportMode)) ?? modes[0]!;
   const save = () => {
     if (preset) return;
@@ -103,7 +112,9 @@ export function openExportDialog(ctx: ExportContext): void {
 
   function renderOps(): void {
     opsBox.replaceChildren();
-    const usable = OPS.filter((d) => (d.stream === "video" ? mode.video && hasVideo : mode.audio));
+    previewBtns.clear();
+    const usable = OPS.filter((d) => (d.stream === "video" ? mode.video && hasVideo : mode.audio))
+      .filter((d) => d.id !== "captions" || !!ctx.words?.length);
     if (!usable.length) {
       opsBox.append(h("p", { class: "muted" }, "No processing in this mode — pick “exact” or an audio format to crop or filter."));
       return;
@@ -129,6 +140,7 @@ export function openExportDialog(ctx: ExportContext): void {
         grid.append(r.el);
       }
       body.append(grid);
+      if (d.id === "captions" && media) body.append(previewBox());
       opsBox.append(h("div", { class: "op" },
         h("label", { class: "chk op-head" }, on, h("strong", {}, d.label), h("small", { class: "muted" }, d.help)),
         body));
@@ -145,13 +157,14 @@ export function openExportDialog(ctx: ExportContext): void {
     onchange: () => { st.vars = varsChk.checked; save(); update(); },
   });
 
-  const specOf = (): Omit<CutSpec, "input" | "output" | "tmp"> => ({
+  const specOf = (): Omit<CutSpec, "input" | "output" | "tmp" | "fontsDir"> => ({
     ranges, mode: mode.cut, audioCodec: mode.codec, hasVideo, frame: ctx.frame,
     ops: st.ops.filter((o) => {
       const d = opDef(o.id);
       return d && (d.stream === "video" ? mode.video : mode.audio);
     }),
     fade: st.smooth ? 0.01 : 0,
+    ...(ctx.words?.length ? { words: ctx.words, lang: ctx.lang } : {}),
   });
   const extOf = () => outputExt(mode.cut, media?.name ?? ".mp4", hasVideo || !media, mode.codec);
   const audioOpsOn = () => st.ops.some((o) => o.on && opDef(o.id)?.stream === "audio");
@@ -238,12 +251,12 @@ export function openExportDialog(ctx: ExportContext): void {
   renderOps();
   update();
 
-  let ac: AbortController | null = null;
   stop.onclick = () => ac?.abort();
   go.onclick = async () => {
-    if (!media) return;
+    if (!media || ac) return;
     ac = new AbortController();
     go.disabled = true;
+    previewBtns.forEach((b) => { b.disabled = true; });
     stop.hidden = false;
     bar.hidden = false;
     logEl.textContent = "";
@@ -275,10 +288,60 @@ export function openExportDialog(ctx: ExportContext): void {
       status.className = "error";
     } finally {
       go.disabled = false;
+      previewBtns.forEach((b) => { b.disabled = false; });
       stop.hidden = true;
       ac = null;
     }
   };
+
+  /**
+   * A few seconds of the export, rendered exactly as the real one (same job, a
+   * faster encoder preset), and played back in the dialog.
+   */
+  function previewBox(): HTMLElement {
+    const PREVIEW = 5;
+    const from = h("input", {
+      type: "number", min: 0, max: Math.max(0, Math.floor(total - 1)), step: 1, value: "0", class: "num",
+      "aria-label": "Preview from (seconds into the cut)",
+    });
+    const msg = h("small", { class: "muted" });
+    const vid = h("video", { controls: true, playsinline: true, hidden: true, class: "cap-preview" });
+    const btn = h("button", {
+      title: `Render ${PREVIEW} seconds of the export, captions and all, through ffmpeg.wasm`,
+      onclick: async () => {
+        if (!media || ac) return;
+        ac = new AbortController();
+        btn.disabled = go.disabled = true;
+        stop.hidden = false;
+        msg.className = "muted";
+        try {
+          const t = Math.min(Math.max(0, Number(from.value) || 0), Math.max(0, total - 0.5));
+          const spec = { ...specOf(), mode: "exact" as const, ranges: sliceOutput(ranges, t, PREVIEW), preset: "ultrafast", crf: 26 };
+          const r = await runCut(media, {
+            spec, ext: "mp4", signal: ac.signal,
+            progress: (m) => { msg.textContent = m; },
+            log: (line) => { logEl.textContent += line + "\n"; },
+          });
+          if (vid.src) URL.revokeObjectURL(vid.src);
+          vid.src = URL.createObjectURL(r.blob);
+          vid.hidden = false;
+          void vid.play().catch(() => {});
+          msg.textContent = `${fmtDur(t)}–${fmtDur(Math.min(total, t + PREVIEW))} of the cut`;
+        } catch (e) {
+          msg.textContent = (e as Error).message;
+          msg.className = "error";
+        } finally {
+          btn.disabled = go.disabled = !media;
+          stop.hidden = true;
+          ac = null;
+        }
+      },
+    }, "▶ Preview");
+    previewBtns.add(btn);
+    return h("div", { class: "cap-preview-box" },
+      h("div", { class: "row wrap" }, btn, h("label", { class: "inline" }, "from", from, "s into the cut"), msg),
+      vid);
+  }
 }
 
 // ------------------------------------------------------------------ fields

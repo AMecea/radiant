@@ -3,9 +3,12 @@
  * browser runs (frame-accurate trims, joins, crop, audio filters). Inputs are
  * seek-only (`start`, `inputs[].start`) and segment lengths live in the graph,
  * which is what the step can express.
+ *
+ * Captions add a `shell` step first: it writes the .ass script and downloads the
+ * font the graph's `ass` filter reads.
  */
 
-import { encodePlan, type CutSpec } from "./ffjob";
+import { encodePlan, fontLines, requireLines, shQuote, type CutSpec } from "./ffjob";
 
 export interface RadiantOptions {
   /** use ${vars.input} / ${vars.output}, declared with the original values as defaults */
@@ -33,8 +36,26 @@ export function radiantPlan(spec: CutSpec, o: RadiantOptions = {}): string {
   if (o.vars) {
     lines.push("vars:", `  input: ${q(spec.input)}`, `  output: ${q(spec.output)}`, "");
   }
+  if (p.requires.includes("ass")) {
+    lines.push("# The captions need an ffmpeg with libass (macOS: brew install ffmpeg-full).", "");
+  }
+  lines.push("steps:");
+  if (p.files.length || p.fonts.length) {
+    const sh = [
+      ...requireLines(p.requires),
+      ...fontLines(p.fonts, p.fontsDir),
+      ...p.files.map((f) => `cat > ${shQuote(f.path)} <<'EOF'\n${f.text.replace(/\n$/, "")}\nEOF`),
+    ];
+    lines.push(
+      "  - id: captions",
+      "    action: shell",
+      "    with:",
+      "      cmd: |",
+      ...sh.join("\n").split("\n").map((l) => (l ? `        ${l}` : "")),
+      "",
+    );
+  }
   lines.push(
-    "steps:",
     "  - id: cut",
     "    action: ffmpeg",
     "    with:",

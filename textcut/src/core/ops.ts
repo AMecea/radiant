@@ -6,7 +6,13 @@
  *
  * Video ops see the frame size left by the ops before them (a crop changes what a
  * later scale works on), so they can emit exact pixel sizes.
+ *
+ * An op can also need files next to the command (captions: an .ass script and its
+ * font). It gets what it needs to write them from {@link OpEnv}.
  */
+
+import { ACCENTS, CAPTION_STYLES, captionScript, type FontFile } from "./captions";
+import type { TimeRange } from "./ranges";
 
 export interface Frame {
   width: number;
@@ -14,6 +20,32 @@ export interface Frame {
 }
 
 export type Params = Record<string, string | number>;
+
+/** What ops that write files need besides their params. */
+export interface OpEnv {
+  /** the transcript's words, source time (for captions) */
+  words?: ReadonlyArray<{ s: number; e: number; w: string }>;
+  /** transcript language */
+  lang?: string;
+  /** the cut's ranges, in output order */
+  ranges: readonly TimeRange[];
+  /** prefix for the files an op writes (e.g. "textcut_" → textcut_captions.ass) */
+  tmp: string;
+  /** directory the fonts go to */
+  fontsDir: string;
+}
+
+export interface OpResult {
+  filter: string;
+  frame: Frame | null;
+  /** extra output options */
+  out?: string[];
+  /** text files the filter reads, written before ffmpeg runs */
+  files?: Array<{ path: string; text: string }>;
+  /** fonts the filter needs in `OpEnv.fontsDir` */
+  fonts?: FontFile[];
+  notes?: string[];
+}
 
 export type Field =
   | { key: string; label: string; type: "select"; options: Array<[value: string, label: string]> }
@@ -31,7 +63,7 @@ export interface OpDef {
    * null when the source size isn't known (then emit an expression-based filter).
    * Returns null when the op is a no-op for this input. `out`: extra output options.
    */
-  build(p: Params, frame: Frame | null): { filter: string; frame: Frame | null; out?: string[] } | null;
+  build(p: Params, frame: Frame | null, env?: OpEnv): OpResult | null;
 }
 
 /** One op as configured by the user. */
@@ -113,6 +145,40 @@ export const OPS: OpDef[] = [
     },
   },
   {
+    id: "captions",
+    label: "Captions",
+    help: "Burn the transcript into the video as styled, word-timed captions (rendered by libass).",
+    stream: "video",
+    fields: [
+      { key: "style", label: "Style", type: "select", options: CAPTION_STYLES.map((c) => [c.id, c.label]) },
+      { key: "accent", label: "Accent colour", type: "select", options: ACCENTS },
+      { key: "y", label: "Position from top", type: "range", min: 5, max: 95, step: 1, unit: "%" },
+      { key: "scale", label: "Size", type: "range", min: 50, max: 200, step: 5, unit: "%" },
+      {
+        key: "words", label: "Words per caption", type: "select",
+        options: [["0", "Style default"], ["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"], ["8", "8"], ["12", "12"]],
+      },
+      { key: "case", label: "Case", type: "select", options: [["style", "Style default"], ["upper", "UPPER CASE"], ["asis", "As transcribed"]] },
+    ],
+    defaults: { style: "pop", accent: "#FFE11A", y: 70, scale: 100, words: "0", case: "style" },
+    build(p, f, env) {
+      if (!env?.words?.length) return null;
+      const notes: string[] = [];
+      if (!f) notes.push("Video size unknown — captions are laid out for 1080×1920 and may look stretched.");
+      const frame = f ?? { width: 1080, height: 1920 };
+      const cap = captionScript(env.words, env.ranges, frame, {
+        style: String(p.style), accent: String(p.accent), y: Number(p.y) / 100, scale: Number(p.scale) / 100,
+        words: Number(p.words), case: String(p.case), lang: env.lang,
+      });
+      if (!cap.count) return null;
+      const path = `${env.tmp}captions.ass`;
+      return {
+        filter: `ass=filename=${filterArg(path)}:fontsdir=${filterArg(env.fontsDir)}`,
+        frame: f, files: [{ path, text: cap.ass }], fonts: [cap.font], notes,
+      };
+    },
+  },
+  {
     id: "denoise",
     label: "Reduce noise",
     help: "Removes steady background noise (hum, fans, hiss) with ffmpeg's afftdn.",
@@ -149,20 +215,35 @@ export function normalizeOps(saved: readonly OpState[] | null | undefined): OpSt
   });
 }
 
+/** Escape a value for a filter option (`:` separates options, `'` and `\\` quote). */
+export function filterArg(v: string): string {
+  return v.replace(/[\\':]/g, (c) => `\\${c}`);
+}
+
+export interface OpChains {
+  video: string[];
+  audio: string[];
+  frame: Frame | null;
+  out: string[];
+  files: Array<{ path: string; text: string }>;
+  fonts: FontFile[];
+  notes: string[];
+}
+
 /** Filter chains for the enabled ops, in registry order, and the final frame size. */
-export function opFilters(ops: readonly OpState[], frame: Frame | null, withVideo: boolean): {
-  video: string[]; audio: string[]; frame: Frame | null; out: string[];
-} {
-  const video: string[] = [], audio: string[] = [], out: string[] = [];
-  let f = frame;
+export function opFilters(ops: readonly OpState[], frame: Frame | null, withVideo: boolean, env?: OpEnv): OpChains {
+  const r: OpChains = { video: [], audio: [], frame, out: [], files: [], fonts: [], notes: [] };
   for (const d of OPS) {
     const st = ops.find((o) => o.id === d.id);
     if (!st?.on || (d.stream === "video" && !withVideo)) continue;
-    const r = d.build({ ...d.defaults, ...st.p }, f);
-    if (!r) continue;
-    (d.stream === "video" ? video : audio).push(r.filter);
-    if (r.out) out.push(...r.out);
-    if (d.stream === "video") f = r.frame;
+    const b = d.build({ ...d.defaults, ...st.p }, r.frame, env);
+    if (!b) continue;
+    (d.stream === "video" ? r.video : r.audio).push(b.filter);
+    if (b.out) r.out.push(...b.out);
+    if (b.files) r.files.push(...b.files);
+    if (b.fonts) for (const f of b.fonts) if (!r.fonts.some((x) => x.file === f.file)) r.fonts.push(f);
+    if (b.notes) r.notes.push(...b.notes);
+    if (d.stream === "video") r.frame = b.frame;
   }
-  return { video, audio, frame: f, out };
+  return r;
 }

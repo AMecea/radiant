@@ -5,6 +5,7 @@
  */
 
 import type { TimeRange } from "./ranges";
+import type { FontFile } from "./captions";
 import { opFilters, type Frame, type OpState } from "./ops";
 
 export type CutMode =
@@ -29,8 +30,14 @@ export interface CutSpec {
   audioCodec?: AudioCodec;
   crf?: number;
   preset?: string;
-  /** prefix for intermediate files (copy mode) */
+  /** prefix for intermediate files (copy mode's parts, the captions script) */
   tmp?: string;
+  /** the transcript's words, source time — captions need them */
+  words?: ReadonlyArray<{ s: number; e: number; w: string }>;
+  /** transcript language (captions' upper-casing) */
+  lang?: string;
+  /** where the captions' fonts go (default "textcut_fonts") */
+  fontsDir?: string;
 }
 
 export interface FfJob {
@@ -38,6 +45,11 @@ export interface FfJob {
   steps: string[][];
   /** text files the steps need, written before the first step */
   files: Array<{ path: string; text: string }>;
+  /** fonts to download into `fontsDir` before the first step */
+  fonts?: FontFile[];
+  fontsDir?: string;
+  /** ffmpeg filters the job needs that not every build has (e.g. "ass": libass) */
+  requires?: string[];
   /** intermediate files to delete afterwards */
   temps: string[];
   output: string;
@@ -112,6 +124,11 @@ export interface EncodePlan {
   audio: { codec: string; bitrate?: string };
   /** extra output options contributed by ops (e.g. -ar 48000) */
   extra: string[];
+  /** text files and fonts the graph reads (captions) */
+  files: Array<{ path: string; text: string }>;
+  fonts: FontFile[];
+  fontsDir: string;
+  requires: string[];
   faststart: boolean;
   duration: number;
   notes: string[];
@@ -187,7 +204,11 @@ export function encodePlan(spec: CutSpec, seekOnly = false): EncodePlan {
     aOut = "[ac]";
   }
 
-  const ops = opFilters(spec.ops ?? [], spec.frame ?? null, video);
+  const fontsDir = spec.fontsDir ?? "textcut_fonts";
+  const ops = opFilters(spec.ops ?? [], spec.frame ?? null, video, {
+    words: spec.words, lang: spec.lang, ranges, tmp: spec.tmp ?? "textcut_", fontsDir,
+  });
+  notes.push(...ops.notes);
   if (video && ops.video.length) {
     graph.push(`${vOut}${ops.video.join(",")}[vout]`);
     vOut = "[vout]";
@@ -207,6 +228,8 @@ export function encodePlan(spec: CutSpec, seekOnly = false): EncodePlan {
     audio: codec === "mp3" ? { codec: "libmp3lame", bitrate: "192k" }
          : codec === "pcm" ? { codec: "pcm_s16le" } : { codec: "aac", bitrate: "192k" },
     extra: ops.out,
+    files: ops.files, fonts: ops.fonts, fontsDir,
+    requires: ops.video.some((f) => f.startsWith("ass=")) ? ["ass"] : [],
     faststart: /\.(mp4|m4a|mov|m4v)$/i.test(spec.output),
     duration, notes,
   };
@@ -222,7 +245,11 @@ function encodeJob(spec: CutSpec): FfJob {
   args.push("-c:a", p.audio.codec, ...(p.audio.bitrate ? ["-b:a", p.audio.bitrate] : []), ...p.extra);
   if (p.faststart) args.push("-movflags", "+faststart");
   args.push(spec.output);
-  return { steps: [args], files: [], temps: [], output: spec.output, duration: p.duration, notes: p.notes };
+  return {
+    steps: [args], files: p.files, temps: p.files.map((f) => f.path), output: spec.output, duration: p.duration, notes: p.notes,
+    ...(p.fonts.length ? { fonts: p.fonts, fontsDir: p.fontsDir } : {}),
+    ...(p.requires.length ? { requires: p.requires } : {}),
+  };
 }
 
 // ------------------------------------------------------------ shell rendering
@@ -261,14 +288,32 @@ export interface ShellVars {
  */
 export function jobToShell(job: FfJob, vars?: ShellVars): string {
   const out: string[] = [];
-  const multi = job.steps.length > 1 || job.files.length > 0;
+  const multi = job.steps.length > 1 || job.files.length > 0 || !!job.fonts?.length;
   if (multi) out.push("set -e");
   if (vars) {
     out.push(`INPUT=\${INPUT:-${shQuote(vars.input)}}`, `OUTPUT=\${OUTPUT:-${shQuote(vars.output)}}`);
   }
   const sub = (a: string) => (vars && a === vars.input ? '"$INPUT"' : vars && a === vars.output ? '"$OUTPUT"' : null);
+  out.push(...requireLines(job.requires));
+  out.push(...fontLines(job.fonts, job.fontsDir));
   for (const f of job.files) out.push(`cat > ${shQuote(f.path)} <<'EOF'\n${f.text.replace(/\n$/, "")}\nEOF`);
   for (const s of job.steps) out.push(fmtCommand(s, sub));
   if (job.temps.length) out.push(`rm -f ${job.temps.map(shQuote).join(" ")}`);
   return out.join("\n");
+}
+
+/** Shell lines that stop early when this ffmpeg lacks a filter the job uses. */
+export function requireLines(filters: readonly string[] = []): string[] {
+  return filters.map((f) =>
+    `ffmpeg -hide_banner -filters 2>/dev/null | grep -q ' ${f} ' || ` +
+    `{ echo "This needs an ffmpeg with the '${f}' filter${f === "ass" ? " (libass; macOS: brew install ffmpeg-full)" : ""}" >&2; exit 1; }`);
+}
+
+/** Shell lines that download the fonts once (kept for the next run). */
+export function fontLines(fonts: readonly FontFile[] = [], dir = "textcut_fonts"): string[] {
+  if (!fonts.length) return [];
+  return [
+    `mkdir -p ${shQuote(dir)}`,
+    ...fonts.map((f) => `[ -s ${shQuote(`${dir}/${f.file}`)} ] || curl -fsSL -o ${shQuote(`${dir}/${f.file}`)} ${shQuote(f.url)}`),
+  ];
 }

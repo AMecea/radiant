@@ -24,8 +24,8 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   at pauses, or copied as a radiant plan, radiant `trim`/`clip` steps, an ffmpeg command,
   CSV, JSON or SRT.
 - **Export** the edit, the clips or a selection, with optional **processing**: *crop* to
-  9:16 / 1:1 / 4:5… (drag the frame on a preview), *resize*, *reduce noise*, *normalise
-  loudness*. *Smooth joins* adds 10 ms audio fades at every cut, so word-level cuts
+  9:16 / 1:1 / 4:5… (drag the frame on a preview), *resize*, *captions*, *reduce noise*,
+  *normalise loudness*. *Smooth joins* adds 10 ms audio fades at every cut, so word-level cuts
   don't click. The dialog always shows the **ffmpeg command** for the current choices
   (copy it, or download it as a `.sh`) and the **radiant plan**: one `ffmpeg` step with
   the same filter graph (copy it, or download it as a `.yaml`). Both describe the same
@@ -39,6 +39,21 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
     same export dialog. They can run it in their browser or copy the command or plan,
     and their own saved settings stay untouched. Hosted media goes in the link. A local
     file can't, so the recipient is asked for it.
+
+  **Captions** burn the transcript into the video, timed word by word on the cut. It
+  uses an ASS script rendered by libass (ffmpeg's `ass` filter). There are four styles:
+  *Bold pop* (2–3 upper-case words, the spoken word in the accent colour, a scale-in pop),
+  *One word at a time*, *Karaoke fill* (words fill with colour as they're spoken), and
+  *Clean subtitles on a box*. You can also set the accent colour, position, size, words
+  per caption and case. The fonts are open-licensed Google Fonts (Poppins, Anton) from a
+  pinned jsDelivr URL. **▶ Preview** renders 5 seconds of the export, captions and all,
+  through the same job, and plays it in the dialog.
+  - In the browser, ffmpeg.wasm already has libass.
+  - A native ffmpeg needs libass too: on macOS `brew install ffmpeg-full`, because
+    Homebrew's plain `ffmpeg` has no `ass`, `subtitles` or `drawtext` filters. The shell
+    script checks for it, downloads the font into `textcut_fonts/` once, and writes
+    `textcut_captions.ass` next to the output. The radiant plan does the same in a
+    `shell` step before the `ffmpeg` step.
 
   Formats:
   - **WAV**: instant. A PCM `.wav` source is cut straight from its bytes, so a 1-hour
@@ -143,8 +158,9 @@ next/previous) · `Esc` clear · `?` help
 ```
 src/core/      pure logic, unit-tested: transcript parsing, pauses/ranges, search,
                time formats, clip export formats, link encoding, WAV read/write,
-               edits.ts (text edits → time ranges), ops.ts (crop/resize/audio
-               filters), ffjob.ts (a cut → ffmpeg argv + shell script)
+               edits.ts (text edits → time ranges), ops.ts (crop/resize/captions/
+               audio filters), captions.ts (words → ASS captions), ffjob.ts (a cut →
+               ffmpeg argv + shell script), radiant.ts (a cut → radiant plan)
 src/app/       UI: editor (player, transcript, selection, edits, clips), timeline
                canvas, start page / link builder, export dialog, export (WAV +
                ffmpeg.wasm), ffmpeg worker (lazy File/URL reads), sources
@@ -159,7 +175,8 @@ threshold in ⚙ Settings, which also holds the padding added around every cut (
 ### Adding processing
 
 Each processing step is one entry in `OPS` in `src/core/ops.ts`. An entry has an id,
-a label, its fields (selects or sliders), defaults, and a `build(params, frame)` that
-returns one ffmpeg filter. Video ops receive the frame size left by the ops before
+a label, its fields (selects or sliders), defaults, and a `build(params, frame, env)` that
+returns one ffmpeg filter. It can also return text files and fonts the filter reads, the
+way captions do: `env` has the words, the ranges and where to put the files. Video ops receive the frame size left by the ops before
 them, so they can emit exact pixel sizes. The export dialog renders the fields, and the
 job builder chains the filters after the cuts are joined. Nothing else needs changing.

@@ -148,6 +148,10 @@ const handlers: Record<string, Handler> = {
   writeFile: ({ path, data }: { path: string; data: Uint8Array | string }) => core!.FS.writeFile(path, data),
   readFile: ({ path }: { path: string }) => core!.FS.readFile(path),
   deleteFile: ({ path }: { path: string }) => core!.FS.unlink(path),
+  /** Create a directory; fine if it exists. */
+  mkdir({ path }: { path: string }) {
+    try { core!.FS.mkdir(path); } catch { /* EEXIST */ }
+  },
   /** Mount local File objects (read lazily from disk) at `dir`. */
   mountFiles({ dir, files }: { dir: string; files: File[] }) {
     core!.FS.mkdir(dir);

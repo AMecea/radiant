@@ -1163,6 +1163,7 @@ export class Editor {
       stem: stemOf(this.media?.name ?? this.title),
       fileName,
       settings: this.settings,
+      words: this.words, lang: this.t.language,
       preset,
       shareLink: async (x) => {
         const { p, warnings } = await this.linkParams(false);
