@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { assColor, assInlineColor, assTime, captionScript, chunkWords, wordsOnCut, type CueWord } from "../src/core/captions";
+import { assColor, assInlineColor, assTime, captionLayout, captionScript, chunkWords, wordsOnCut, type CueWord } from "../src/core/captions";
 import { buildJob, jobToShell } from "../src/core/ffjob";
 import { normalizeOps } from "../src/core/ops";
 import { radiantPlan } from "../src/core/radiant";
@@ -208,5 +208,20 @@ describe("sliceOutput", () => {
     expect(sliceOutput(rs, 1, 3)).toEqual([{ s: 11, e: 12 }, { s: 20, e: 22 }]);
     expect(sliceOutput(rs, 0, 100)).toEqual(rs);
     expect(sliceOutput(rs, 7.5, 5)).toEqual([{ s: 30.5, e: 31 }]);
+  });
+});
+
+describe("the layout a live preview shares with the script", () => {
+  const words = ["Bună", "ziua,", "dragi", "prieteni."].map((w, i) => ({ s: 10 + i * 0.5, e: 10.4 + i * 0.5, w }));
+  const ranges = [{ s: 10, e: 12 }];
+  const frame = { width: 1080, height: 1920 };
+
+  it("has the script's captions, sizes and position", () => {
+    const L = captionLayout(words, ranges, frame, { style: "pop", size: 6, y: 0.7, words: 2 });
+    expect(L.chunks.map((c) => c.words.map((w) => w.w).join(" "))).toEqual(["BUNĂ ZIUA", "DRAGI PRIETENI"]);
+    expect(L.chunks[0]!.s).toBe(0);              // on the cut's timeline, not the source's
+    expect(L.em).toBeCloseTo(64.8);              // 6% of the shorter side
+    expect(L).toMatchObject({ y: 0.7, upper: true, fontName: "Inter Black", accent: "#FFB013" });
+    expect(captionScript(words, ranges, frame, { style: "pop", size: 6, y: 0.7, words: 2 }).count).toBe(L.chunks.length);
   });
 });

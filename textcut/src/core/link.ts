@@ -19,6 +19,9 @@ import type { TimeRange } from "./ranges";
  *   fx     spelling fixes: "3~Kenobi|10~two words" (index ~ text, "|" between)
  *   x      an export to open on arrival (ranges, format, processing), packed:
  *          see {@link ExportPreset}
+ *   recs   URL of a <stem>.clips.json with recommended clips (see core/recs.ts);
+ *          without it, the file next to `words` is tried
+ *   rx     the recommended clips themselves, packed like `tx`
  */
 export interface LinkParams {
   words?: string;
@@ -36,6 +39,8 @@ export interface LinkParams {
   dg?: string;
   fx?: string;
   x?: string;
+  recs?: string;
+  rx?: string;
 }
 
 /** A ready-to-run export, shared in a link (`x=`, deflate + base64url JSON). */
@@ -80,6 +85,9 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   if (fx) out.fx = fx;
   const x = get("x");
   if (x) out.x = x;
+  const recs = get("recs"), rx = get("rx");
+  if (recs) out.recs = recs;
+  if (rx) out.rx = rx;
   const clips = get("clips");
   if (clips) out.clips = decodeRanges(clips);
   const reels = get("reels");
@@ -109,6 +117,8 @@ export function buildLink(base: string, p: LinkParams): string {
   if (p.dg) h.set("dg", p.dg);
   if (p.fx) h.set("fx", p.fx);
   if (p.x) h.set("x", p.x);
+  if (p.recs) h.set("recs", p.recs);
+  if (p.rx) h.set("rx", p.rx);
   if (p.tx) h.set("tx", p.tx); // last: it's the long one
   const frag = h.toString().replace(/%2F/gi, "/").replace(/%3A/gi, ":").replace(/%2C/gi, ",");
   return `${base.replace(/#.*$/, "")}#${frag}`;

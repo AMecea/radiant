@@ -1,10 +1,13 @@
 import "./style.css";
-import { readLink, type LinkParams } from "./core/link";
+import { APP_NAME } from "./core/app";
+import { readLink, unpackJson, type LinkParams } from "./core/link";
+import { parseRecs, siblingRecsUrl } from "./core/recs";
 import { h, toast } from "./app/dom";
 import { Editor } from "./app/editor";
 import { openView, type OpenResult } from "./app/open-view";
+import { restoreUserFont } from "./app/userfont";
 import {
-  isMediaFile, isTranscriptFile, loadTranscriptFile, loadTranscriptInline, loadTranscriptUrl,
+  isMediaFile, isRecsFile, isTranscriptFile, loadRecsUrl, loadTranscriptFile, loadTranscriptInline, loadTranscriptUrl,
   mediaFromFile, mediaFromUrl,
 } from "./app/sources";
 
@@ -14,7 +17,7 @@ let editor: Editor | null = null;
 function showOpen(error?: string, prefill?: LinkParams): void {
   editor?.destroy();
   editor = null;
-  document.title = "textcut";
+  document.title = APP_NAME;
   app.replaceChildren(openView(startEditor, error, prefill));
 }
 
@@ -29,10 +32,11 @@ function startEditor(r: OpenResult): void {
   });
   app.replaceChildren(editor.root);
   editor.mounted();
-  document.title = `${r.link.title || r.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "")} · textcut`;
+  document.title = `${r.link.title || r.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "")} · ${APP_NAME}`;
 }
 
 async function boot(): Promise<void> {
+  await restoreUserFont(); // before anything lays out captions in it
   const link = readLink(location);
   if (!link.words && !link.tx) {
     showOpen(link.media || link.full ? "The link has media but no transcript (words= or tx=)." : undefined, link);
@@ -48,6 +52,26 @@ async function boot(): Promise<void> {
     startEditor({ loaded, media: preview ? mediaFromUrl(preview) : null, full: link.media ? full : null, link });
   } catch (e) {
     showOpen((e as Error).message, link);
+    return;
+  }
+  void loadRecs(link, editor!);
+}
+
+/**
+ * Recommended clips for the recording: packed in the link, at the URL the link
+ * names, or — by convention — in the `.clips.json` next to the `.words.json`.
+ * Only a source the link names is worth an error; the conventional file usually
+ * isn't there.
+ */
+async function loadRecs(link: LinkParams, target: Editor): Promise<void> {
+  const guess = link.rx || link.recs || !link.words ? null : siblingRecsUrl(link.words);
+  try {
+    const recs = link.rx ? parseRecs(await unpackJson(link.rx))
+      : link.recs ? await loadRecsUrl(link.recs)
+      : guess ? await loadRecsUrl(guess) : null;
+    if (recs && editor === target) target.setRecs(recs, link.rx ? { rx: link.rx } : link.recs ? { recs: link.recs } : {});
+  } catch (e) {
+    if (!guess && editor === target) toast(`Couldn't load the recommended clips: ${(e as Error).message}`, "err", 5000);
   }
 }
 
@@ -57,6 +81,15 @@ document.addEventListener("drop", async (e) => {
   if (!editor || !e.dataTransfer?.files.length) return;
   e.preventDefault();
   const files = Array.from(e.dataTransfer.files);
+  const recs = files.find(isRecsFile);
+  if (recs) {
+    try {
+      const n = editor.setRecs(parseRecs(await recs.text()));
+      toast(n ? `${n} recommended clip${n > 1 ? "s" : ""} from ${recs.name}` : `${recs.name} has no clips for this recording`, n ? "ok" : "info");
+    } catch (err) {
+      toast(`${recs.name}: ${(err as Error).message}`, "err", 5000);
+    }
+  }
   const media = files.find(isMediaFile);
   const tr = files.find((f) => !isMediaFile(f) && isTranscriptFile(f));
   try {

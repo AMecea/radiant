@@ -1,15 +1,20 @@
 import {
   gluesToPrev, parseLineMode, textOf, transcriptLines, wordAt, compactTranscript, type Transcript, type Word,
 } from "../core/transcript";
-import { findPauses, mergeRanges, rangeOf, splitAtPauses, wordsIn, type Pause, type TimeRange, type WordRange } from "../core/ranges";
+import { findPauses, mergeRanges, moveEdge, rangeOf, splitAtPauses, wordsIn, type Pause, type TimeRange, type WordRange } from "../core/ranges";
 import { buildSearchIndex, search, type SearchIndex } from "../core/search";
 import { fmtDur, fmtShort, fmtTime } from "../core/time";
+import { APP_NAME } from "../core/app";
 import { CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
 import {
   encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
-import { copyText, h, isTyping, modal, toast } from "./dom";
+import { parseRecs, placeRecs, recsFile, type PlacedRec, type Rec, type RecsFile } from "../core/recs";
+import { buildRecPrompt, promptLines, readRecAnswer } from "../core/recprompt";
+import { captionLayout, FONTS, type CaptionLayout } from "../core/captions";
+import { cropRect, normalizeOps } from "../core/ops";
+import { copyText, download, h, isTyping, modal, toast } from "./dom";
 import { loadJson, loadSettings, saveJson, saveSettings, type Settings } from "./settings";
 import {
   mediaFromFile, mediaFromUrl, probeMediaInfo, stemOf, type LoadedTranscript, type MediaInfo, type MediaSource,
@@ -21,6 +26,21 @@ import { Timeline } from "./timeline";
 interface Reel {
   name: string;
   parts: Clip[];
+  /** captions: the transcript on screen, in the player and burned into the export */
+  cc?: boolean;
+}
+
+/** how far ▲ / ▼ move the captions, in % of the frame's height */
+const CAPTION_STEP = 3;
+
+/** The current clip's captions, laid out for the player. */
+interface CapState {
+  key: string;
+  layout: CaptionLayout;
+  /** the clip's ranges as exported (edits applied), in order */
+  ranges: TimeRange[];
+  /** the frame the captions sit in (the crop, or the whole picture), in source pixels */
+  box: { x: number; y: number; w: number; h: number };
 }
 
 export interface EditorInit {
@@ -37,7 +57,9 @@ type PlayMode =
   | { kind: "free" }
   | { kind: "until"; e: number }
   | { kind: "loop"; r: TimeRange }
-  | { kind: "queue"; list: TimeRange[]; i: number };
+  | { kind: "queue"; list: TimeRange[]; i: number; rec?: number };
+
+const ASK_AI_KEY = "textcut.askai.v1";
 
 export class Editor {
   readonly t: Transcript;
@@ -60,6 +82,10 @@ export class Editor {
   private reels: Reel[] = [];
   /** the clip that A / S add to */
   private active = 0;
+  /** recommended clips for this recording, best first */
+  private recs: PlacedRec[] = [];
+  /** how a shared link names them; null = they came from a dropped file, so pack them */
+  private recsLink: Pick<LinkParams, "recs" | "rx"> | null = null;
   private hits: WordRange[] = [];
   private hitIdx = -1;
   private cur = -1;
@@ -92,6 +118,20 @@ export class Editor {
   private selBar!: HTMLElement;
   private editsEl!: HTMLElement;
   private clipsEl!: HTMLElement;
+  private recsEl!: HTMLElement;
+  private capEl!: HTMLElement;
+  private cropEl!: HTMLElement;
+  private capState: CapState | null = null;
+  /** what the caption overlay currently shows, to repaint only on change */
+  private capShown = "";
+  private capFonts = new Set<string>();
+  /** the crop frame as drawn on the player, to redraw only on change */
+  private frameShown = "";
+  private frameChk!: HTMLInputElement;
+  private frameLbl!: HTMLElement;
+  private onDialogClose = (): void => this.paintCaptions();
+  /** until when (performance.now) a sample caption shows where the captions sit */
+  private capHint = 0;
   private searchInput!: HTMLInputElement;
   private searchCount!: HTMLElement;
   private timeline!: Timeline;
@@ -109,6 +149,7 @@ export class Editor {
     this.recomputePauses();
     this.renderTranscript();
     this.restoreClips();
+    this.restoreRecs();
     this.restoreEdits();
     this.setMedia(init.media);
     this.setFull(init.full ?? null);
@@ -136,7 +177,7 @@ export class Editor {
     this.searchCount = h("span", { class: "count" });
 
     const top = h("header", { class: "topbar" },
-      h("button", { class: "brand", title: "Open other files / build a link", onclick: () => this.init.onOpenOther() }, "textcut"),
+      h("button", { class: "brand", title: "Open other files / build a link", onclick: () => this.init.onOpenOther() }, APP_NAME),
       h("div", { class: "doc-title" },
         h("strong", {}, this.title),
         h("span", { class: "muted" },
@@ -152,7 +193,17 @@ export class Editor {
 
     this.video = h("video", { playsInline: true, preload: "auto" });
     this.video.playbackRate = s.rate;
-    this.playerBox = h("div", { class: "player" }, this.video);
+    const grip = h("div", { class: "cap-grip", title: "Drag to move the frame the export keeps" }, "⇔ drag");
+    this.cropEl = h("div", { class: "cap-frame", hidden: true }, grip);
+    this.bindFrameDrag(grip);
+    this.frameChk = h("input", { type: "checkbox", onchange: () => this.setFrame(this.frameChk.checked) });
+    this.frameLbl = h("span", {}, "Frame");
+    const frameToggle = h("label", {
+      class: "chk", title: "Show the frame the export keeps (its Crop) on the video, and drag it into place",
+    }, this.frameChk, this.frameLbl);
+    this.capEl = h("div", { class: "cap-overlay", hidden: true });
+    this.playerBox = h("div", { class: "player" }, this.video, this.cropEl, this.capEl);
+    new ResizeObserver(() => { this.capShown = ""; this.paintCaptions(); }).observe(this.playerBox);
     this.playBtn = h("button", { class: "play", title: "Play / pause (Space)", onclick: () => this.togglePlay() }, "▶");
     this.timeEl = h("span", { class: "time mono" }, "0:00.0");
     const rate = h("select", {
@@ -162,7 +213,10 @@ export class Editor {
     const transport = h("div", { class: "transport" }, this.playBtn, this.timeEl, h("span", { class: "spacer" }), rate,
       this.toggle("Follow", "Keep the current word in view", "follow"),
       this.toggle("Skip pauses", "Jump over pauses while playing (preview of a tightened cut)", "skipPauses"),
-      this.toggle("Skip cuts", "Jump over deleted words and pauses while playing (preview the edit)", "previewEdits"));
+      this.toggle("Skip cuts", "Jump over deleted words and pauses while playing (preview the edit)", "previewEdits"),
+      frameToggle);
+    // The export dialog changes the crop and the captions: catch up when it closes.
+    document.addEventListener("close", this.onDialogClose, true);
 
     this.timeline = new Timeline({
       seek: (t) => this.seek(t),
@@ -175,6 +229,7 @@ export class Editor {
     this.selBar = h("div", { class: "selbar" });
     this.editsEl = h("section", { class: "edits" });
     this.clipsEl = h("section", { class: "clips" });
+    this.recsEl = h("section", { class: "recs" });
     this.trEl = h("article", { class: "transcript", tabindex: "0", "aria-label": "Transcript" });
 
     const approx = this.words.some((w) => w.approx)
@@ -182,7 +237,7 @@ export class Editor {
           "they're approximate. Re-run the transcribe step with word_timestamps: true for exact cuts.")
       : null;
 
-    const left = h("section", { class: "left" }, this.playerBox, transport, this.timeline.el, this.selBar, this.editsEl, this.clipsEl);
+    const left = h("section", { class: "left" }, this.playerBox, transport, this.timeline.el, this.selBar, this.editsEl, this.clipsEl, this.recsEl);
     const lineSel = h("select", {
       "aria-label": "Transcript lines", title: "How the transcript is broken into lines (the export isn't affected)",
       onchange: () => { s.lineMode = lineSel.value; saveSettings(s); this.renderTranscript(); },
@@ -345,17 +400,18 @@ export class Editor {
     void this.video.play();
   }
 
-  private playQueue(list: TimeRange[]): void {
+  /** Play ranges back to back; `rec` marks them as that recommendation rather than the current clip. */
+  private playQueue(list: TimeRange[], rec?: number): void {
     if (!list.length) return;
     this.seek(list[0]!.s);
-    this.setMode({ kind: "queue", list, i: 0 });
+    this.setMode({ kind: "queue", list, i: 0, rec });
     void this.video.play();
   }
 
   private setMode(m: PlayMode): void {
     this.mode = m;
     this.loopBtn?.classList.toggle("on", m.kind === "loop");
-    this.clipsEl.classList.toggle("playing-all", m.kind === "queue");
+    this.clipsEl.classList.toggle("playing-all", m.kind === "queue" && m.rec == null);
     this.highlightPlayingClip();
   }
 
@@ -400,6 +456,7 @@ export class Editor {
       }
     }
     this.timeEl.textContent = `${fmtShort(t)} / ${fmtShort(this.duration)}`;
+    this.paintCaptions(t);
     this.timeline.setTime(t);
     this.updateCurrent(wordAt(this.words, t + 1e-3), !v.paused);
   }
@@ -438,6 +495,7 @@ export class Editor {
   // ======================================================== transcript
 
   private recomputePauses(): void {
+    this.capState = null;
     this.pauses = findPauses(this.words, this.settings.pauseMin, this.duration);
     this.removed = removedRanges(this.words, this.edits, this.cutParams);
     this.timeline.setRemoved(this.removed);
@@ -489,11 +547,13 @@ export class Editor {
   /** Put the spelling fixes into the words, and everything derived from their text. */
   private applyFixes(): void {
     for (const [i, w] of this.words.entries()) w.w = this.fixes.get(i) ?? this.origW[i]!;
+    this.capState = null;
     this.index = buildSearchIndex(this.words);
     this.txPacked = null;
     for (const r of this.reels) for (const p of r.parts) p.text = this.textIn(p);
     if (this.trEl.childElementCount) this.renderTranscript();
     if (this.clipsEl.childElementCount) this.renderClips();
+    this.renderRecs();
     if (this.searchInput.value) this.runSearch();
     this.renderSelBar();
   }
@@ -785,7 +845,7 @@ export class Editor {
       const saved = loadJson<{ reels: Reel[]; active: number }>(this.reelsKey);
       // Before multiple clips, one list of segments was stored under the clips key.
       const legacy = saved ? null : loadJson<Clip[]>(this.clipsKey);
-      this.reels = saved?.reels?.map((r) => ({ name: String(r.name || "Clip"), parts: withText(r.parts ?? []) }))
+      this.reels = saved?.reels?.map((r) => ({ name: String(r.name || "Clip"), parts: withText(r.parts ?? []), cc: !!r.cc }))
         ?? (legacy?.length ? [{ name: "Clip 1", parts: withText(legacy) }] : []);
       this.active = Math.max(0, Math.min(saved?.active ?? 0, this.reels.length - 1));
     }
@@ -837,9 +897,12 @@ export class Editor {
   private clipsChanged(save = true): void {
     if (save) saveJson(this.reelsKey, { reels: this.reels, active: this.active });
     this.txPacked = null;
+    this.capState = null;
+    this.paintCaptions();
     this.paintClips();
     this.timeline.setClips(this.clips);
     this.renderClips();
+    this.renderRecs();
     this.renderSelBar();
   }
 
@@ -854,7 +917,9 @@ export class Editor {
   private highlightPlayingClip(): void {
     const m = this.mode;
     this.clipsEl.querySelectorAll(".reel.active li").forEach((li, i) =>
-      li.classList.toggle("now", m.kind === "queue" && i === m.i));
+      li.classList.toggle("now", m.kind === "queue" && m.rec == null && i === m.i));
+    this.recsEl.querySelectorAll("li").forEach((li, i) =>
+      li.classList.toggle("now", m.kind === "queue" && m.rec === i));
   }
 
   private renderClips(): void {
@@ -884,6 +949,17 @@ export class Editor {
         }) : h("strong", { class: "reel-name" }, reel.name),
         h("span", { class: "muted" }, n ? `${n} segment${n > 1 ? "s" : ""} · ${fmtDur(dur(reel.parts))}` : "empty"),
         h("span", { class: "spacer" }),
+        h("button", {
+          class: `cc${reel.cc ? " on" : ""}`, "aria-pressed": String(!!reel.cc),
+          title: reel.cc
+            ? "Captions are on: the transcript shows on the video here and is burned into this clip's export. Click to turn them off"
+            : "Captions: put the transcript (with your fixes) on screen for this clip — in the player and in its export",
+          onclick: (e: Event) => { e.stopPropagation(); this.toggleCaptions(ri); },
+        }, "CC"),
+        ...(reel.cc && on ? [
+          h("button", { class: "icon cc-move", title: "Move the captions up", onclick: (e: Event) => { e.stopPropagation(); this.moveCaptions(-1); } }, "▲"),
+          h("button", { class: "icon cc-move", title: "Move the captions down", onclick: (e: Event) => { e.stopPropagation(); this.moveCaptions(1); } }, "▼"),
+        ] : []),
         h("button", {
           class: "icon", title: `Play ${reel.name}`, disabled: !n,
           onclick: (e: Event) => { e.stopPropagation(); this.selectReel(ri); this.playQueue(reel.parts); },
@@ -918,7 +994,8 @@ export class Editor {
             onclick: () => { const r = wordsIn(this.words, c.s + 1e-3, c.e - 1e-3); if (r) { this.setSel(r); this.seek(c.s); this.wordEls[r.a]?.scrollIntoView({ block: "center" }); } },
           },
             h("div", { class: "mono" }, `${fmtShort(c.s)} → ${fmtShort(c.e)}`, h("span", { class: "muted" }, ` ${fmtDur(c.e - c.s)}`)),
-            h("div", { class: "clip-text" }, oneLine(c.text ?? "", 90))),
+            h("div", { class: "clip-text" }, oneLine(c.text ?? "", 90)),
+            h("div", { class: "seg-edges" }, this.edgeButtons(reel, i, "start"), this.edgeButtons(reel, i, "end"))),
           h("div", { class: "clip-actions" },
             h("button", { class: "icon", title: "Move up", disabled: i === 0, onclick: () => this.moveClip(i, -1) }, "↑"),
             h("button", { class: "icon", title: "Move down", disabled: i === n - 1, onclick: () => this.moveClip(i, 1) }, "↓"),
@@ -943,11 +1020,397 @@ export class Editor {
     this.highlightPlayingClip();
   }
 
+  // ======================================================== recommended clips
+
+  private get recsKey(): string {
+    return this.clipsKey.replace(".clips.", ".recs.");
+  }
+
+  /** The recommendations this person brought themselves (an AI's answer, a dropped file). */
+  private restoreRecs(): void {
+    const saved = loadJson<RecsFile>(this.recsKey);
+    if (!saved) return this.renderRecs();
+    try { this.setRecs(parseRecs(saved)); } catch { this.renderRecs(); }
+  }
+
+  /**
+   * Show these recommended clips (replacing any shown before). `link` is how a
+   * shared link should name them; leave it out for a list the person brought
+   * themselves (an AI's answer, a dropped file). Their own list is kept in the
+   * browser for this recording and wins over the link's until they clear it.
+   * Returns how many clips are now shown.
+   */
+  setRecs(recs: readonly Rec[], link: Pick<LinkParams, "recs" | "rx"> | null = null): number {
+    if (link) {
+      if (loadJson<RecsFile>(this.recsKey)) return this.recs.length;
+    } else if (recs.length) {
+      saveJson(this.recsKey, recsFile(recs));
+    } else {
+      try { localStorage.removeItem(this.recsKey); } catch { /* private mode */ }
+    }
+    this.recs = placeRecs(recs, this.words);
+    this.recsLink = link;
+    this.timeline.setRecs(this.recs.flatMap((r) => this.recRanges(r)));
+    this.renderRecs();
+    return this.recs.length;
+  }
+
+  /** A recommendation's segments, padded like a selection of the same words. */
+  private recRanges(rec: PlacedRec): Clip[] {
+    return rec.parts.map((p) => ({
+      ...rangeOf(this.words, p.a, p.b, this.settings.pad, this.duration),
+      text: textOf(this.words, p.a, p.b),
+    }));
+  }
+
+  /** The clip a recommendation was turned into, if it still exists. */
+  private reelOfRec(rec: PlacedRec): number {
+    return this.reels.findIndex((r) => r.name === rec.title && r.parts.length > 0);
+  }
+
+  private addRecAsClip(rec: PlacedRec): void {
+    // An untouched, empty first clip would only be left behind.
+    if (this.reels.length === 1 && !this.reels[0]!.parts.length) this.reels = [];
+    this.reels.push({ name: rec.title, parts: this.recRanges(rec) });
+    this.active = this.reels.length - 1;
+    this.clipsChanged();
+    toast(`“${rec.title}” is now a clip — adjust its ends with « ‹ › », then Export`);
+    this.clipsEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  private showRec(rec: PlacedRec): void {
+    const first = rec.parts[0]!;
+    this.setSel({ a: first.a, b: first.b });
+    this.seek(this.words[first.a]!.s);
+    this.wordEls[first.a]?.scrollIntoView({ block: "center" });
+  }
+
+  private renderRecs(): void {
+    const el = this.recsEl;
+    el.replaceChildren();
+    el.append(h("header", {},
+      h("h3", {}, "Recommended"),
+      h("span", { class: "muted" }, this.recs.length ? `${this.recs.length} for reels & shorts` : "none yet"),
+      h("span", { class: "spacer" }),
+      h("button", { title: "Get a prompt for the AI you use, and paste its answer back", onclick: () => this.openAskAi() }, "Ask an AI…"),
+      this.recs.length
+        ? h("button", { class: "icon", title: "Clear the recommendations", onclick: () => this.setRecs([]) }, "✕")
+        : null));
+    if (!this.recs.length) {
+      el.append(h("p", { class: "hint" }, "Passages worth posting as reels or shorts, picked from this transcript. ",
+        "“Ask an AI…” gives you a prompt for ChatGPT, Claude, Gemini or any other AI you use."));
+      return;
+    }
+    const list = h("ol", {});
+    this.recs.forEach((rec, i) => {
+      const parts = this.recRanges(rec);
+      const dur = parts.reduce((n, c) => n + (c.e - c.s), 0);
+      const made = this.reelOfRec(rec);
+      const meta = [fmtDur(dur), `at ${fmtShort(parts[0]!.s)}`, parts.length > 1 ? `${parts.length} segments` : "", ...rec.tags]
+        .filter(Boolean).join(" · ");
+      list.append(h("li", { class: made >= 0 ? "made" : "" },
+        rec.score != null ? h("span", { class: "rec-score mono", title: "How well it should work as a reel, 0–100" }, String(rec.score)) : null,
+        h("div", {
+          class: "clip-body", title: "Show it in the transcript (selects its words)",
+          onclick: () => this.showRec(rec),
+        },
+          h("div", { class: "rec-title" }, h("strong", {}, rec.title), h("span", { class: "muted" }, meta)),
+          h("div", { class: "clip-text" }, oneLine(parts.map((c) => c.text ?? "").join(" … "), 110)),
+          rec.why ? h("div", { class: "rec-why" }, rec.why) : null),
+        h("div", { class: "clip-actions" },
+          h("button", { class: "icon", title: `Play “${rec.title}”`, onclick: () => this.playQueue(parts, i) }, "▶"),
+          made >= 0
+            ? h("button", { title: "Already a clip — go to it", onclick: () => this.selectReel(made) }, "✓ Clip")
+            : h("button", { class: "primary", title: "Make it a clip you can trim and export", onclick: () => this.addRecAsClip(rec) }, "+ Clip"))));
+    });
+    el.append(list);
+    this.highlightPlayingClip();
+  }
+
+  /**
+   * Recommendations from the person's own AI: we write the prompt, they run it
+   * wherever they like and paste the answer back. Nothing is sent from here.
+   */
+  private openAskAi(): void {
+    const lines = promptLines(this.words);
+    const saved = loadJson<{ count: number; min: number; max: number; notes: string }>(ASK_AI_KEY);
+    const num = (v: number, min: number, max: number) => h("input", { type: "number", min, max, step: 1, value: v });
+    const count = num(saved?.count ?? 12, 1, 40), lo = num(saved?.min ?? 20, 5, 600), hi = num(saved?.max ?? 90, 10, 900);
+    const notes = h("input", {
+      type: "text", value: saved?.notes ?? "",
+      placeholder: "e.g. for our church's Instagram; skip anything that needs the Bible passage on screen",
+    });
+    let language = this.t.language;
+    try { language = new Intl.DisplayNames(["en"], { type: "language" }).of(this.t.language) ?? language; } catch { /* keep the code */ }
+
+    const prompt = () => {
+      const n = (el: HTMLInputElement, d: number) => (Number(el.value) > 0 ? Number(el.value) : d);
+      const o = { count: Math.round(n(count, 12)), min: n(lo, 20), max: Math.max(n(hi, 90), n(lo, 20)), notes: notes.value.trim() };
+      saveJson(ASK_AI_KEY, o);
+      return buildRecPrompt(lines, { count: o.count, minSeconds: o.min, maxSeconds: o.max, language, guidance: o.notes });
+    };
+    const size = h("span", { class: "muted" });
+    const sized = () => { size.textContent = `${lines.length} lines · ${prompt().length.toLocaleString("en")} characters`; };
+    for (const el of [count, lo, hi, notes]) el.addEventListener("input", sized);
+    sized();
+    const copied = h("span", { class: "ask-ai-ok", role: "status" });
+    const stem = this.init.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "") || "transcript";
+
+    const answer = h("textarea", { rows: 7, spellcheck: false, placeholder: "Paste the AI's whole answer here" });
+    const error = h("p", { class: "ask-ai-err", role: "alert", hidden: true });
+    const show = h("button", {
+      class: "primary",
+      onclick: () => {
+        try {
+          const n = this.setRecs(readRecAnswer(answer.value, lines));
+          if (!n) throw new Error("None of the clips in the answer fall inside this transcript.");
+          dlg.close();
+          toast(`${n} recommended clip${n > 1 ? "s" : ""} — play them, then “+ Clip” the ones you want`);
+          this.recsEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } catch (e) {
+          error.textContent = (e as Error).message;
+          error.hidden = false;
+        }
+      },
+    }, "Show the clips");
+
+    const dlg = modal("Recommended clips from your AI", h("div", { class: "ask-ai" },
+      h("p", {}, `${APP_NAME} doesn't talk to an AI itself. Copy the prompt, paste it into the one you use `,
+        "(ChatGPT, Claude, Gemini, DeepSeek…), then paste its answer back here."),
+      h("h4", {}, "1 · The prompt"),
+      h("div", { class: "ask-ai-row" },
+        h("label", { class: "inline" }, "Clips", count),
+        h("label", { class: "inline" }, "Each", lo, "to", hi, "seconds")),
+      h("label", { class: "ask-ai-notes" }, "Notes for the AI (optional)", notes),
+      h("div", { class: "ask-ai-row" },
+        h("button", {
+          class: "primary",
+          onclick: () => void copyText(prompt(), "Prompt copied").then(() => { copied.textContent = "Copied — now paste it into your AI."; }),
+        }, "Copy the prompt"),
+        h("button", {
+          title: "For an AI that takes a long text better as an attached file",
+          onclick: () => download(prompt(), `${stem}.prompt.txt`, "text/plain"),
+        }, "Download as .txt"),
+        size),
+      copied,
+      h("h4", {}, "2 · Its answer"),
+      answer, error), [show]);
+  }
+
   private exportReel(i: number): void {
     const reel = this.reels[i]!;
     const slug = reel.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
     this.exportRanges(`Export ${reel.name}`, reel.parts, undefined, true, null,
-      `${stemOf(this.src?.name ?? this.title)}_${slug || "clip"}`);
+      `${stemOf(this.src?.name ?? this.title)}_${slug || "clip"}`, reel);
+  }
+
+  // ======================================================== captions on the player
+
+  private toggleCaptions(i: number): void {
+    const reel = this.reels[i]!;
+    reel.cc = !reel.cc;
+    this.active = i;
+    this.clipsChanged();
+    toast(!reel.cc ? `Captions off for ${reel.name}`
+      : this.hasVideo ? `Captions on for ${reel.name} — play it to see them; Export burns them in (style and position are set there)`
+      : `Captions on for ${reel.name} — they're burned in when you export video`, "info", 4500);
+  }
+
+  /**
+   * Move the captions up (-1) or down (+1) a step. Their position is the export's
+   * "Position from top" setting, shared by every clip.
+   */
+  private moveCaptions(dir: -1 | 1): void {
+    const ops = normalizeOps(this.settings.ops);
+    const cap = ops.find((o) => o.id === "captions")!;
+    const y = Math.max(5, Math.min(95, Math.round(Number(cap.p.y) || 70) + dir * CAPTION_STEP));
+    if (y === cap.p.y) { toast(`The captions are as ${dir < 0 ? "high" : "low"} as they go`, "info"); return; }
+    cap.p.y = y;
+    this.settings.ops = ops;
+    saveSettings(this.settings);
+    // Paused between captions there is nothing to see move: show a sample for a moment.
+    this.capHint = performance.now() + 1500;
+    setTimeout(() => this.paintCaptions(), 1550);
+    this.paintCaptions();
+    toast(`Captions ${y}% from the top`, "info", 1200);
+  }
+
+  // -------------------------------------------------------- the export's frame on the player
+
+  /** Where the picture sits inside the player (it is letterboxed): scale and offset. */
+  private pictureGeom(): { k: number; ox: number; oy: number } | null {
+    const v = this.video;
+    if (!this.hasVideo || !v.videoWidth || !v.clientWidth) return null;
+    const k = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight);
+    return { k, ox: v.offsetLeft + (v.clientWidth - v.videoWidth * k) / 2, oy: v.offsetTop + (v.clientHeight - v.videoHeight * k) / 2 };
+  }
+
+  /** Turn the export's crop on or off (the same switch as Export → Crop). */
+  private setFrame(on: boolean): void {
+    const ops = normalizeOps(this.settings.ops);
+    ops.find((o) => o.id === "crop")!.on = on;
+    this.settings.ops = ops;
+    saveSettings(this.settings);
+    this.paintCaptions();
+    if (on) toast("The export keeps what's inside the frame — drag its top bar to move it. Aspect and size are in Export → Crop", "info", 5000);
+  }
+
+  /** Dragging the frame's bar moves the crop, like dragging the box in the export dialog. */
+  private bindFrameDrag(grip: HTMLElement): void {
+    let drag: { x: number; y: number; cx: number; cy: number } | null = null;
+    grip.addEventListener("pointerdown", (e) => {
+      const crop = normalizeOps(this.settings.ops).find((o) => o.id === "crop")!;
+      drag = { x: e.clientX, y: e.clientY, cx: Number(crop.p.cx), cy: Number(crop.p.cy) };
+      try { grip.setPointerCapture(e.pointerId); } catch { /* the drag still works while the pointer stays on the bar */ }
+      e.preventDefault();
+    });
+    grip.addEventListener("pointermove", (e) => {
+      const g = this.pictureGeom();
+      if (!drag || !g) return;
+      const v = this.video, frame = { width: v.videoWidth, height: v.videoHeight };
+      const ops = normalizeOps(this.settings.ops);
+      const crop = ops.find((o) => o.id === "crop")!;
+      const cx = drag.cx + (e.clientX - drag.x) / (frame.width * g.k), cy = drag.cy + (e.clientY - drag.y) / (frame.height * g.k);
+      // Store the clamped centre, so dragging past an edge doesn't build up slack.
+      const r = cropRect({ ...crop.p, cx, cy }, frame);
+      crop.p.cx = +((r.x + r.w / 2) / frame.width).toFixed(4);
+      crop.p.cy = +((r.y + r.h / 2) / frame.height).toFixed(4);
+      this.settings.ops = ops;
+      this.paintCaptions();
+    });
+    const end = () => { if (drag) saveSettings(this.settings); drag = null; };
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  }
+
+  /** Draw the export's crop frame over the video (whenever a crop is set). */
+  private paintFrame(): void {
+    const crop = normalizeOps(this.settings.ops).find((o) => o.id === "crop")!;
+    if (this.frameChk.checked !== crop.on) this.frameChk.checked = crop.on;
+    const label = `Frame ${String(crop.p.aspect ?? "")}`.trim();
+    if (this.frameLbl.textContent !== label) this.frameLbl.textContent = label;
+    const g = crop.on ? this.pictureGeom() : null;
+    const v = this.video;
+    const sig = g ? `${JSON.stringify(crop.p)}|${v.videoWidth}x${v.videoHeight}|${g.k.toFixed(5)}|${g.ox}|${g.oy}` : "off";
+    if (sig === this.frameShown) return;
+    this.frameShown = sig;
+    this.cropEl.hidden = !g;
+    if (!g) return;
+    const r = cropRect(crop.p, { width: v.videoWidth, height: v.videoHeight });
+    Object.assign(this.cropEl.style, {
+      left: `${g.ox + r.x * g.k}px`, top: `${g.oy + r.y * g.k}px`, width: `${r.w * g.k}px`, height: `${r.h * g.k}px`,
+    });
+  }
+
+  /** The captions of the current clip, laid out as its export would draw them. */
+  private captionState(reel: Reel): CapState {
+    const v = this.video;
+    const ops = normalizeOps(this.settings.ops);
+    const cap = ops.find((o) => o.id === "captions")!, crop = ops.find((o) => o.id === "crop")!;
+    const key = `${v.videoWidth}x${v.videoHeight}|${JSON.stringify(cap.p)}|${crop.on ? JSON.stringify(crop.p) : ""}`;
+    if (this.capState?.key === key) return this.capState;
+    const frame = { width: v.videoWidth, height: v.videoHeight };
+    const box = crop.on ? cropRect(crop.p, frame) : { x: 0, y: 0, w: frame.width, h: frame.height };
+    const ranges = this.removed.length ? subtractRanges(reel.parts, this.removed) : reel.parts.map((c) => ({ s: c.s, e: c.e }));
+    const p = cap.p;
+    const layout = captionLayout(this.words, ranges, { width: box.w, height: box.h }, {
+      style: String(p.style), font: String(p.font ?? ""), size: Number(p.size), accent: String(p.accent), y: Number(p.y) / 100,
+      words: Number(p.words), case: String(p.case), lang: this.t.language,
+    });
+    this.loadCaptionFont(layout.fontName);
+    this.capShown = "";
+    return (this.capState = { key, layout, ranges, box });
+  }
+
+  /** The export's font, for the preview (the same files the export downloads). */
+  private loadCaptionFont(name: string): void {
+    if (this.capFonts.has(name) || !FONTS[name] || typeof FontFace === "undefined") return;
+    this.capFonts.add(name);
+    new FontFace(`textcut ${name}`, `url(${FONTS[name].url})`, { weight: "800" }).load()
+      .then((f) => { document.fonts.add(f); this.capShown = ""; this.paintCaptions(); })
+      .catch(() => { /* the fallback font stays */ });
+  }
+
+  /**
+   * Draw the current clip's caption for time `t` over the video: the same words,
+   * grouping, size and position as the export (which libass renders — outlines and
+   * animation differ a little). With a crop set, the frame it keeps is outlined.
+   */
+  private paintCaptions(t = this.video.currentTime || 0): void {
+    this.paintFrame();
+    const reel = this.reels[this.active];
+    const g = this.pictureGeom();
+    if (!reel?.cc || !reel.parts.length || !g) {
+      if (this.capShown !== "off") { this.capEl.hidden = true; this.capShown = "off"; }
+      return;
+    }
+    const c = this.captionState(reel);
+    let out = -1, off = 0;
+    for (const r of c.ranges) {
+      if (t >= r.s && t < r.e) { out = off + t - r.s; break; }
+      off += r.e - r.s;
+    }
+    const ci = out < 0 ? -1 : c.layout.chunks.findIndex((k) => out >= k.s && out < k.e);
+    // nothing being said right now: after a move, a sample caption shows the new position
+    const sample = ci < 0 && performance.now() < this.capHint;
+    const chunk = c.layout.chunks[sample ? 0 : ci];
+    // the word being spoken: the last one that has started
+    let wi = -1;
+    if (chunk && !sample) chunk.words.forEach((w, i) => { if (w.s <= out) wi = i; });
+    const { k, ox, oy } = g;
+    const sig = `${c.key}|${ci}|${wi}|${k.toFixed(4)}|${out >= 0}|${sample}`;
+    if (sig === this.capShown) return;
+    this.capShown = sig;
+
+    // the frame the captions sit in: the crop, or the whole picture
+    const bx = ox + c.box.x * k, by = oy + c.box.y * k, bw = c.box.w * k, bh = c.box.h * k;
+
+    const el = this.capEl;
+    el.hidden = !chunk;
+    if (!chunk) return;
+    const L = c.layout, st = L.style, em = L.em * k;
+    Object.assign(el.style, {
+      opacity: sample ? "0.6" : "1",
+      left: `${bx + bw / 2}px`, top: `${by + bh * L.y}px`, maxWidth: `${bw * 0.86}px`, fontSize: `${em}px`,
+      fontFamily: `"textcut ${L.fontName}", system-ui, sans-serif`,
+      webkitTextStroke: st.box ? "0" : `${(em * st.outline * 2).toFixed(2)}px #000`,
+      textShadow: st.shadow ? `${(em * st.shadow).toFixed(2)}px ${(em * st.shadow).toFixed(2)}px 0 rgba(0,0,0,.5)` : "none",
+      background: st.box ? "rgba(0,0,0,.62)" : "none",
+      padding: st.box ? `${(em * 0.25).toFixed(1)}px ${(em * 0.5).toFixed(1)}px` : "0",
+    });
+    el.replaceChildren(...chunk.words.flatMap((w, i) => {
+      const lit = st.mode === "highlight" ? i === wi : st.mode === "karaoke" ? i <= wi : false;
+      return [i ? " " : "", h("span", lit ? { style: `color:${L.accent}` } : {}, w.w)];
+    }));
+  }
+
+  /** « ‹ › » for one edge of a segment: move it by a phrase or a word, earlier or later. */
+  private edgeButtons(reel: Reel, i: number, edge: "start" | "end"): HTMLElement {
+    const grows = (dir: -1 | 1) => (edge === "start") === (dir < 0);
+    const btn = (label: string, dir: -1 | 1, phrase: boolean) => h("button", {
+      title: `${edge === "start" ? "Start" : "End"} one ${phrase ? "phrase (to the next sentence end or pause)" : "word"} ` +
+        `${dir < 0 ? "earlier" : "later"} — ${grows(dir) ? "extends" : "shortens"} the segment`,
+      onclick: (e: Event) => { e.stopPropagation(); this.moveSegmentEdge(reel, i, edge, dir, phrase); },
+    }, label);
+    return h("span", { class: "grp" }, h("small", {}, edge === "start" ? "Start" : "End"),
+      btn("«", -1, true), btn("‹", -1, false), btn("›", 1, false), btn("»", 1, true));
+  }
+
+  /** Extend or shorten a segment at one end, keeping it on word boundaries. */
+  private moveSegmentEdge(reel: Reel, i: number, edge: "start" | "end", dir: -1 | 1, phrase: boolean): void {
+    const c = reel.parts[i]!;
+    const cur = wordsIn(this.words, c.s + 1e-3, c.e - 1e-3);
+    if (!cur) return;
+    const r = moveEdge(this.words, cur, edge, dir, phrase ? this.settings.pauseMin : undefined);
+    if (r.a === cur.a && r.b === cur.b) {
+      toast(`The segment can't ${(edge === "start") === (dir < 0) ? "grow" : "shrink"} any further there`, "info");
+      return;
+    }
+    reel.parts[i] = { ...rangeOf(this.words, r.a, r.b, this.settings.pad, this.duration), text: textOf(this.words, r.a, r.b) };
+    this.clipsChanged();
+    // Show the new extent in the transcript, at the end that moved.
+    this.setSel(r);
+    this.wordEls[edge === "start" ? r.a : r.b]?.scrollIntoView({ block: "center" });
   }
 
   private moveClip(i: number, d: -1 | 1): void {
@@ -1063,6 +1526,7 @@ export class Editor {
     const reels = this.reels.filter((r) => r.parts.length);
     if (reels.length) p.reels = reels.map((r) => ({ name: r.name, ranges: r.parts }));
     Object.assign(p, packEdits(this.edits));
+    if (this.recs.length) Object.assign(p, this.recsLink ?? { rx: await packJson(recsFile(this.recs)) });
     if (withSel && this.sel) { p.sel = this.selRange(); p.at = p.sel.s; }
     return { p, warnings };
   }
@@ -1209,6 +1673,8 @@ export class Editor {
     if (save) saveJson(this.editsKey, packEdits(this.edits));
     this.txPacked = null;
     this.removed = removedRanges(this.words, this.edits, this.cutParams);
+    this.capState = null;
+    this.paintCaptions();
     this.timeline.setRemoved(this.removed);
     if (this.trEl.childElementCount) this.paintEdits();
     this.renderEdits();
@@ -1302,14 +1768,14 @@ export class Editor {
 
   /** Export ranges (clips / a selection): the text edits inside them are applied. */
   private exportRanges(heading: string, ranges: readonly Clip[], summary?: string, applyEdits = true,
-                       preset: ExportPreset | null = null, fileName?: string): void {
-    void this.openExport(heading, ranges, summary, applyEdits, preset, fileName);
+                       preset: ExportPreset | null = null, fileName?: string, reel?: Reel): void {
+    void this.openExport(heading, ranges, summary, applyEdits, preset, fileName, reel);
   }
 
   private exporting = false;
 
   private async openExport(heading: string, ranges: readonly Clip[], summary: string | undefined, applyEdits: boolean,
-                           preset: ExportPreset | null, fileName?: string): Promise<void> {
+                           preset: ExportPreset | null, fileName?: string, reel?: Reel): Promise<void> {
     const list = applyEdits ? this.applyEdits(ranges) : [...ranges];
     if (!list.length) { toast("Nothing left to export — it's all been cut", "err"); return; }
     const dur = (rs: readonly TimeRange[]) => rs.reduce((n, r) => n + (r.e - r.s), 0);
@@ -1339,6 +1805,8 @@ export class Editor {
       fileName,
       settings: this.settings,
       words: this.words, lang: this.t.language,
+      // a clip decides for itself whether it has captions (the CC button)
+      ...(reel ? { captions: !!reel.cc, onCaptions: (on: boolean) => { reel.cc = on; this.clipsChanged(); } } : {}),
       preset,
       shareLink: async (x) => {
         const { p, warnings } = await this.linkParams(false);
@@ -1410,6 +1878,7 @@ export class Editor {
       ["← →", "Previous / next word"], ["Alt + ← →", "Back / forward 5 s"],
       ["Enter", "Play selection"], ["L", "Loop selection"], ["A", "Add selection to the current clip"], ["N", "Start a new clip"],
       ["S", "Add selection to the clip, without its pauses"], ["C", "Copy selection times"],
+      ["« ‹ › » on a segment", "Move its start or end by a phrase / a word"],
       ["[  ]", "Copy start / end time"], ["/", "Search"], ["Enter / Shift+Enter (in search)", "Next / previous match"],
       ["Delete / Backspace", "Cut the selected words (again: restore)"],
       ["E", "Fix the spelling of the selection (or the current word)"],
@@ -1478,6 +1947,7 @@ export class Editor {
 
   destroy(): void {
     if (this.keyHandler) document.removeEventListener("keydown", this.keyHandler);
+    document.removeEventListener("close", this.onDialogClose, true);
     cancelAnimationFrame(this.raf);
     this.video.pause();
     this.video.removeAttribute("src");

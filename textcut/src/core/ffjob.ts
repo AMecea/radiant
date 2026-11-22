@@ -309,11 +309,13 @@ export function requireLines(filters: readonly string[] = []): string[] {
     `{ echo "This needs an ffmpeg with the '${f}' filter${f === "ass" ? " (libass; macOS: brew install ffmpeg-full)" : ""}" >&2; exit 1; }`);
 }
 
-/** Shell lines that download the fonts once (kept for the next run). */
+/** Shell lines that download the fonts once (kept for the next run); a font of the user's own has to be there already. */
 export function fontLines(fonts: readonly FontFile[] = [], dir = "textcut_fonts"): string[] {
   if (!fonts.length) return [];
   return [
     `mkdir -p ${shQuote(dir)}`,
-    ...fonts.map((f) => `[ -s ${shQuote(`${dir}/${f.file}`)} ] || curl -fsSL -o ${shQuote(`${dir}/${f.file}`)} ${shQuote(f.url)}`),
+    ...fonts.map((f) => (f.local
+      ? `[ -s ${shQuote(`${dir}/${f.file}`)} ] || { echo ${shQuote(`Put your font ${f.file} into ${dir}/ first`)} >&2; exit 1; }`
+      : `[ -s ${shQuote(`${dir}/${f.file}`)} ] || curl -fsSL -o ${shQuote(`${dir}/${f.file}`)} ${shQuote(f.url)}`)),
   ];
 }

@@ -35,7 +35,7 @@ map it to an action via `help` rather than inventing flags.
 
 1. **Understand the request** and pick actions (`help` to confirm availability/params).
 2. **Author or edit the plan YAML.** Crib structure from `examples/` (`sample.yaml` is
-   the full sync→encode→upload→transcribe→clip→upload flow; `ffmpeg.yaml`, `trim.yaml`,
+   the full sync→encode→upload→transcribe→recommend→clip→upload flow; `ffmpeg.yaml`, `trim.yaml`,
    `timeline.yaml`, `pipe.yaml`, `youtube.yaml`, `shell.yaml`, `stream_upload.yaml` are
    focused samples).
 3. **Validate** — catches unknown actions, bad `${...}` refs, cycles, and missing

@@ -29,7 +29,7 @@ or public URLs carried in the link. See [textcut/README.md](textcut/README.md).
 
 ## `radiant` — the pipeline tool
 
-The whole flow (sync → encode → upload → transcribe → reel-clip → upload) is declared
+The whole flow (sync → encode → upload → transcribe → recommend → reel-clip → upload) is declared
 once in a YAML **plan**. Steps run a slice at a time and each writes output artifacts
 into a persistent workdir, so later steps consume earlier steps' outputs by reference
 and runs are resumable.
@@ -64,7 +64,7 @@ uv run radiant run      --plan examples/sample.yaml --preview 10    # 10s previe
 - **`state` / `set` / `forget`:** `state` prints what the workdir remembers (add `--json` for the raw record); `set <step>.<output>=<value>` pins a value you already know so a later step can consume it without running the producer; `forget <step>` drops a record so it runs again.
 - **Hooks:** optional `on_start` / `on_success` / `on_failure` / `on_pause` shell commands in the plan (`{name}`/`{step}`/`{code}`/`{url}`/`{message}` placeholders) — put `caffeinate` / `telegram` piping there.
 
-Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `concat` (assemble several clips into one timeline, with transitions), `transcribe` (Whisper timestamps — segment-level `.txt`, plus optional word-level `.words.json` with `word_timestamps: true`), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `radiant help` for the full list, or `radiant help <action>` for one action's parameters. See `examples/sample.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/timeline.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
+Step actions: `sync` (offset detect), `encode` (trim + replace audio + re-encode; braw & standard), `clip` (segment + 9:16 crop / face-track), `trim` (keep/drop a list of time ranges), `concat` (assemble several clips into one timeline, with transitions), `transcribe` (Whisper timestamps — segment-level `.txt`, plus optional word-level `.words.json` with `word_timestamps: true`), `recommend` (propose reel / short clips from the `.words.json` — writes the `.clips.json` textcut lists as *Recommended*), `ffmpeg` (general-purpose transcode/convert from basic parameters), `pipe` (compose stages via OS pipes), `shell` (arbitrary command / pipe stage), `upload` (rclone), `upload_stream` (stream a pipe straight to a remote), `youtube` (upload to YouTube), `braw_decode` (BRAW→raw source stage), `pause` (manual checkpoint). Run `radiant help` for the full list, or `radiant help <action>` for one action's parameters. See `examples/sample.yaml`, `examples/ffmpeg.yaml`, `examples/trim.yaml`, `examples/timeline.yaml`, `examples/pipe.yaml`, and `examples/youtube.yaml`.
 
 Each action declares its parameters and outputs uniformly (the `params` / `outputs` specs on its step class), so `radiant help <action>` documents every parameter — type, whether it's required, its default, and what it does — straight from the code. Required parameters are checked at `validate`/`run` time, and `${steps.<id>.<output>}` references are checked against the declared outputs.
 
@@ -111,6 +111,25 @@ The linear-editing primitive: an ordered `clips:` list, each entry a source with
 `pipe` chains several actions into a single streaming command (`stage1 | stage2 | …`), the same shape `encode` uses internally (`braw-decode | ffmpeg`) but assembled declaratively from reusable stages. The first stage is a **source** (writes stdout), the last is the **sink** (writes the `output` file); geometry/format metadata flows from one stage to the next (e.g. `braw_decode` tells `ffmpeg` the rawvideo size + fps). A stage opts in by implementing `Step.command`; today `braw_decode` (source), `concat` (source — it reads its own clips), `ffmpeg`/`trim` (filter or sink), `shell` (any role), and `upload_stream` (streaming sink) do.
 
 A pipe runs as **one unit** — no intermediate file lands on disk, so there's nothing to resume mid-pipe; if the output is deleted the whole pipe re-runs. Use a pipe when you want streaming with no large throwaway intermediate; use separate plan steps when you want per-stage resume. `examples/pipe.yaml` reproduces the `master` encode as `braw_decode | ffmpeg` (the built-in `encode` action is unchanged).
+
+### `recommend` — reel / short proposals
+
+`recommend` reads the `.words.json` that `transcribe` writes with `word_timestamps: true`, asks Claude which passages would stand on their own as a short vertical video, and writes `<stem>.clips.json`: a title, a 0–100 score, a reason, tags and the time range(s) for each. Upload that file next to the `.words.json` and textcut lists the proposals as *Recommended* without anything added to the link.
+
+```yaml
+- id: recommend
+  action: recommend
+  needs: [transcribe]
+  with:
+    words: "${steps.transcribe.words}"
+    count: 12                 # default 12; min_seconds / max_seconds default to 20 / 90
+    guidance: "Sunday sermon; the clips go on the church's Instagram."
+```
+
+- **The model answers with line numbers, not timestamps.** The transcript is given to it as numbered lines that end where the speaker does (a sentence end, or a silence of `pause` seconds), and the step turns the chosen lines back into word-exact times — so a proposal always starts and ends on a real phrase boundary. A clip can have two ranges (a question and its answer much later).
+- **Who is asked:** by default the Claude API (`model`, default `claude-opus-5-5`; `effort`, default `high`), which needs `ANTHROPIC_API_KEY` in the environment. A whole recording is one request. Set `command` instead to pipe the prompt to any program that prints the answer — `command: "claude -p"` uses a logged-in Claude Code and needs no key.
+- `guidance` is free text for the model: the audience, where the clips are posted, what to prefer or avoid. `language` sets the language of titles and reasons (default: the transcript's).
+- The proposals are a starting point: open them in textcut, extend or trim the edges, and export.
 
 ### `pause` — manual checkpoints
 
