@@ -3,13 +3,16 @@ import { compactTranscript } from "../core/transcript";
 import { fmtShort } from "../core/time";
 import { copyText, fmtBytes, h } from "./dom";
 import {
-  isMediaFile, isTranscriptFile, loadTranscriptFile, loadTranscriptUrl, mediaFromFile,
+  isMediaFile, isTranscriptFile, loadTranscriptFile, loadTranscriptUrl, mediaFromFile, probeUrl,
   type LoadedTranscript, type MediaSource,
 } from "./sources";
 
 export interface OpenResult {
   loaded: LoadedTranscript;
+  /** media played in the editor (may be a light preview) */
   media: MediaSource | null;
+  /** full-quality original for exports; null: exports use `media` */
+  full?: MediaSource | null;
   link: LinkParams;
 }
 
@@ -71,6 +74,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
   // ---------------------------------------------------------- link builder
   const wordsUrl = h("input", { type: "url", placeholder: "https://…/talk.words.json", value: prefill.words ?? "" });
   const mediaUrl = h("input", { type: "url", placeholder: "https://…/talk.mp4  (or .mp3, .wav, .m4a…)", value: prefill.media ?? "" });
+  const fullUrl = h("input", { type: "url", placeholder: "optional — https://…/talk_master.mov", value: prefill.full ?? "" });
   const title = h("input", { type: "text", placeholder: "optional", value: prefill.title ?? "" });
   const embed = h("input", { type: "checkbox" });
   const embedFile = h("input", { type: "file", accept: ".json,.txt", hidden: true });
@@ -78,6 +82,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
   const embedName = h("span", { class: "muted" });
   const wordsHint = h("small", { class: "hint-line" });
   const mediaHint = h("small", { class: "hint-line" });
+  const fullHint = h("small", { class: "hint-line" });
   const out = h("textarea", { class: "mono", rows: 3, readOnly: true, placeholder: "Your link appears here" });
   const outInfo = h("p", { class: "muted" });
   const buildErr = h("p", { class: "error", hidden: true });
@@ -101,10 +106,12 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
     const my = ++seq;
     showNormalized(wordsUrl, wordsHint);
     showNormalized(mediaUrl, mediaHint);
+    showNormalized(fullUrl, fullHint);
     buildErr.hidden = true;
     const p: LinkParams = {};
     if (title.value.trim()) p.title = title.value.trim();
     if (mediaUrl.value.trim()) p.media = normalizeUrl(mediaUrl.value);
+    if (fullUrl.value.trim() && normalizeUrl(fullUrl.value) !== p.media) p.full = normalizeUrl(fullUrl.value);
     try {
       if (embed.checked) {
         const loaded = embedLocal ? await loadTranscriptFile(embedLocal)
@@ -133,7 +140,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
     out.value = lastLink;
     outInfo.textContent += `${lastLink.length.toLocaleString()} characters`;
   };
-  for (const el of [wordsUrl, mediaUrl, title]) el.addEventListener("input", () => void rebuild());
+  for (const el of [wordsUrl, mediaUrl, fullUrl, title]) el.addEventListener("input", () => void rebuild());
   embed.addEventListener("change", () => void rebuild());
 
   const check = h("p", { class: "muted" });
@@ -147,7 +154,8 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
           msgs.push(`✓ transcript: ${l.transcript.words.length} words, ${fmtShort(l.transcript.duration)}`);
         } catch (e) { msgs.push(`✗ transcript: ${(e as Error).message}`); }
       }
-      if (mediaUrl.value.trim()) msgs.push(await probeMedia(normalizeUrl(mediaUrl.value)));
+      if (mediaUrl.value.trim()) msgs.push(await probeMedia(normalizeUrl(mediaUrl.value), "media"));
+      if (fullUrl.value.trim()) msgs.push(await probeFull(normalizeUrl(fullUrl.value)));
       check.textContent = msgs.join("  ·  ") || "Nothing to check.";
     },
   }, "Check URLs");
@@ -180,6 +188,9 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
           h("button", { class: "linkish", onclick: (e: Event) => { e.preventDefault(); embedFile.click(); } }, "use a local file…"),
           embedFile, " ", embedName),
         h("label", { class: "field" }, "Media URL", mediaUrl, mediaHint),
+        h("label", { class: "field" }, h("span", {}, "Full-quality URL ",
+          h("small", { class: "muted" }, "— optional: exports read this; the editor plays the media above (a light preview)")),
+          fullUrl, fullHint),
         h("label", { class: "field" }, "Title", title),
         h("div", { class: "row" }, checkBtn, check),
         out, outInfo, buildErr,
@@ -194,6 +205,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
           ...([
             ["words", "URL of the .words.json (or segment .txt)"],
             ["media", "URL of the audio/video — anything your browser plays: mp4, webm, mov (H.264), mp3, m4a, wav, ogg, opus, flac"],
+            ["full", "optional full-quality original: exports, commands and plans read it, while the editor plays media (a light preview)"],
             ["tx", "the transcript itself, compressed (the builder makes this)"],
             ["title", "display title"],
             ["at", "start position — 83.5 or 1:23.5"],
@@ -204,22 +216,38 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
   );
 }
 
-async function probeMedia(url: string): Promise<string> {
+async function probeMedia(url: string, label: string): Promise<string> {
   return new Promise((resolve) => {
     const v = document.createElement("video");
     v.preload = "metadata";
     const done = (msg: string) => { v.removeAttribute("src"); v.load(); resolve(msg); };
-    const timer = setTimeout(() => done("? media: no response after 15 s"), 15_000);
+    const timer = setTimeout(() => done(`? ${label}: no response after 15 s`), 15_000);
     v.onloadedmetadata = () => {
       clearTimeout(timer);
-      done(`✓ media: ${v.videoWidth ? `video ${v.videoWidth}×${v.videoHeight}` : "audio"}, ${fmtShort(v.duration)}`);
+      done(`✓ ${label}: ${v.videoWidth ? `video ${v.videoWidth}×${v.videoHeight}` : "audio"}, ${fmtShort(v.duration)}`);
     };
     v.onerror = () => {
       clearTimeout(timer);
-      done(v.error?.code === 4 ? "✗ media: format/codec not playable in this browser (or not a direct file link)"
-                               : "✗ media: failed to load");
+      done(v.error?.code === 4 ? `✗ ${label}: format/codec not playable in this browser (or not a direct file link)`
+                               : `✗ ${label}: failed to load`);
     };
     v.src = url;
   });
+}
+
+/**
+ * The full-quality file is read by ffmpeg, not played: it needs CORS (and ideally
+ * Range requests), and a codec the browser can't play (ProRes…) is fine.
+ */
+async function probeFull(url: string): Promise<string> {
+  let net: string;
+  try {
+    const { ranges, size } = await probeUrl(url);
+    net = `${size ? fmtBytes(size) + ", " : ""}${ranges ? "Range requests ✓" : "no Range requests (exports download it whole)"}`;
+  } catch (e) {
+    return `✗ full: can't read it (${(e as Error).message}) — the host must allow CORS for exports`;
+  }
+  const play = await probeMedia(url, "full");
+  return play.startsWith("✓") ? `${play}, ${net}` : `✓ full: ${net} (the browser can't play it — fine, ffmpeg reads it)`;
 }
 

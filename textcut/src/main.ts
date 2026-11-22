@@ -35,13 +35,17 @@ function startEditor(r: OpenResult): void {
 async function boot(): Promise<void> {
   const link = readLink(location);
   if (!link.words && !link.tx) {
-    showOpen(link.media ? "The link has media but no transcript (words= or tx=)." : undefined, link);
+    showOpen(link.media || link.full ? "The link has media but no transcript (words= or tx=)." : undefined, link);
     return;
   }
   app.replaceChildren(h("div", { class: "loading" }, "Loading transcript…"));
   try {
     const loaded = link.tx ? await loadTranscriptInline(link.tx, link.title) : await loadTranscriptUrl(link.words!);
-    startEditor({ loaded, media: link.media ? mediaFromUrl(link.media) : null, link });
+    // `media` plays in the editor; `full` (if any) is what exports read. With only
+    // `full`, it does both.
+    const preview = link.media ?? link.full;
+    const full = link.full && link.full !== link.media ? mediaFromUrl(link.full) : null;
+    startEditor({ loaded, media: preview ? mediaFromUrl(preview) : null, full: link.media ? full : null, link });
   } catch (e) {
     showOpen((e as Error).message, link);
   }
@@ -60,7 +64,7 @@ document.addEventListener("drop", async (e) => {
       const loaded = await loadTranscriptFile(tr);
       startEditor({ loaded, media: media ? mediaFromFile(media) : null, link: {} });
     } else if (media) {
-      editor.setMedia(mediaFromFile(media));
+      editor.loadMedia(mediaFromFile(media));
       toast(`Media: ${media.name}`);
     }
   } catch (err) {

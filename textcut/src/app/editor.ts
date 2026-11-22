@@ -11,7 +11,9 @@ import {
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
 import { copyText, h, isTyping, modal, toast } from "./dom";
 import { loadJson, loadSettings, saveJson, saveSettings, type Settings } from "./settings";
-import { mediaFromFile, mediaFromUrl, stemOf, type LoadedTranscript, type MediaSource } from "./sources";
+import {
+  mediaFromFile, mediaFromUrl, probeMediaInfo, stemOf, type LoadedTranscript, type MediaInfo, type MediaSource,
+} from "./sources";
 import { openExportDialog } from "./export-dialog";
 import { Timeline } from "./timeline";
 
@@ -23,7 +25,10 @@ interface Reel {
 
 export interface EditorInit {
   loaded: LoadedTranscript;
+  /** played in the editor: navigating, listening, the crop preview (may be a light preview) */
   media: MediaSource | null;
+  /** full-quality original: what exports, commands and plans read (null: `media`) */
+  full?: MediaSource | null;
   link: LinkParams;
   onOpenOther: () => void;
 }
@@ -39,6 +44,10 @@ export class Editor {
   readonly words: Word[];
   private settings: Settings = loadSettings();
   private media: MediaSource | null;
+  /** the full-quality original, when the editor plays a preview */
+  private full: MediaSource | null = null;
+  /** its frame size etc., read once */
+  private fullInfo: Promise<MediaInfo> | null = null;
   private mediaUrl: string | null = null;
   private hasVideo = false;
   private duration: number;
@@ -93,6 +102,7 @@ export class Editor {
     this.words = this.t.words;
     this.origW = this.words.map((w) => w.w);
     this.media = init.media;
+    this.full = init.full ?? null;
     this.duration = this.t.duration;
     this.index = buildSearchIndex(this.words);
     this.root = this.build();
@@ -101,6 +111,7 @@ export class Editor {
     this.restoreClips();
     this.restoreEdits();
     this.setMedia(init.media);
+    this.setFull(init.full ?? null);
     this.applyLinkState();
     this.bindKeys();
   }
@@ -108,7 +119,7 @@ export class Editor {
   // ======================================================== layout
 
   private get title(): string {
-    return this.init.link.title || stemOf(this.media?.name ?? this.init.loaded.name);
+    return this.init.link.title || stemOf(this.src?.name ?? this.init.loaded.name);
   }
 
   private build(): HTMLElement {
@@ -202,6 +213,40 @@ export class Editor {
 
   // ======================================================== media
 
+  /** What exports read: the full-quality original if there is one, else the played media. */
+  private get src(): MediaSource | null {
+    return this.full ?? this.media;
+  }
+
+  /** Media the user picked / dropped: it replaces both the preview and the original. */
+  loadMedia(src: MediaSource): void {
+    if (this.full) toast(`Exports now use ${src.name} too, instead of ${this.full.name}`, "info", 5000);
+    this.setFull(null);
+    this.setMedia(src);
+  }
+
+  /** The full-quality original exports use (null: they use the played media). */
+  setFull(src: MediaSource | null): void {
+    this.full = src;
+    this.txPacked = null;
+    this.fullInfo = src ? probeMediaInfo(src) : null;
+  }
+
+  /** Video or audio, and frame size, of what exports read. */
+  private async exportInfo(): Promise<{ hasVideo: boolean; frame: { width: number; height: number } | null; note?: string }> {
+    const v = this.video;
+    const preview = this.hasVideo && v.videoWidth ? { width: v.videoWidth, height: v.videoHeight } : null;
+    if (!this.full || !this.fullInfo) return { hasVideo: this.hasVideo, frame: preview };
+    const fi = await this.fullInfo;
+    if (fi.ok) return { hasVideo: fi.hasVideo, frame: fi.hasVideo ? { width: fi.width, height: fi.height } : null };
+    return {
+      hasVideo: this.hasVideo, frame: null,
+      note: `This browser can't read ${this.full.name}'s frame size, so crop and resize are written as ` +
+        "ffmpeg expressions (relative to the real size)." +
+        (preview ? "" : " Captions are laid out for 1080×1920."),
+    };
+  }
+
   setMedia(src: MediaSource | null): void {
     this.media = src;
     this.txPacked = null;
@@ -256,7 +301,7 @@ export class Editor {
         h("span", { class: "muted" }, "or drop it here, or"),
         url,
         h("button", {
-          onclick: () => { if (url.value.trim()) this.setMedia(mediaFromUrl(url.value)); },
+          onclick: () => { if (url.value.trim()) this.loadMedia(mediaFromUrl(url.value)); },
         }, "Load URL")));
   }
 
@@ -264,7 +309,7 @@ export class Editor {
     const input = h("input", { type: "file", accept: "audio/*,video/*,.mkv,.mov,.flac,.opus" });
     input.onchange = () => {
       const f = input.files?.[0];
-      if (f) this.setMedia(mediaFromFile(f));
+      if (f) this.loadMedia(mediaFromFile(f));
     };
     input.click();
   }
@@ -902,7 +947,7 @@ export class Editor {
     const reel = this.reels[i]!;
     const slug = reel.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
     this.exportRanges(`Export ${reel.name}`, reel.parts, undefined, true, null,
-      `${stemOf(this.media?.name ?? this.title)}_${slug || "clip"}`);
+      `${stemOf(this.src?.name ?? this.title)}_${slug || "clip"}`);
   }
 
   private moveClip(i: number, d: -1 | 1): void {
@@ -930,10 +975,11 @@ export class Editor {
   }
 
   private formatClips(kind: ClipFormat, clips: readonly Clip[] = this.clips): string {
-    const name = this.media?.name ?? `${this.title}.mp4`;
+    const src = this.src;
+    const name = src?.name ?? `${this.title}.mp4`;
     return formatClips(clips, kind, {
       style: this.settings.timeStyle,
-      input: this.media?.kind === "url" ? this.media.url : name,
+      input: src?.kind === "url" ? src.url : name,
       output: `${stemOf(name)}_cut.${this.hasVideo || !this.media ? "mp4" : "m4a"}`,
       hasVideo: this.hasVideo || !this.media,
     });
@@ -1005,6 +1051,8 @@ export class Editor {
     const p: LinkParams = { title: this.title };
     if (this.media?.kind === "url") p.media = this.media.url;
     else if (this.media) warnings.push(`The media is a local file (${this.media.name}) — whoever opens the link will be asked to pick it.`);
+    if (this.full?.kind === "url") p.full = this.full.url;
+    else if (this.full) warnings.push(`The full-quality file is local (${this.full.name}) — the link exports from the preview.`);
     const o = this.init.loaded.origin;
     if (o.kind === "url") p.words = o.url;
     else {
@@ -1255,19 +1303,39 @@ export class Editor {
   /** Export ranges (clips / a selection): the text edits inside them are applied. */
   private exportRanges(heading: string, ranges: readonly Clip[], summary?: string, applyEdits = true,
                        preset: ExportPreset | null = null, fileName?: string): void {
+    void this.openExport(heading, ranges, summary, applyEdits, preset, fileName);
+  }
+
+  private exporting = false;
+
+  private async openExport(heading: string, ranges: readonly Clip[], summary: string | undefined, applyEdits: boolean,
+                           preset: ExportPreset | null, fileName?: string): Promise<void> {
     const list = applyEdits ? this.applyEdits(ranges) : [...ranges];
     if (!list.length) { toast("Nothing left to export — it's all been cut", "err"); return; }
     const dur = (rs: readonly TimeRange[]) => rs.reduce((n, r) => n + (r.e - r.s), 0);
     if (applyEdits && dur(list) < dur(ranges) - 0.001) {
       summary ??= "Deleted words and pauses inside them are left out.";
     }
+    if (this.exporting) return;
+    this.exporting = true;
+    let info: Awaited<ReturnType<Editor["exportInfo"]>>;
+    try {
+      // Usually read long ago (it starts with the editor); a slow host may take a moment.
+      const slow = setTimeout(() => toast(`Reading ${this.full?.name ?? "the media"}…`, "info"), 400);
+      info = await this.exportInfo().finally(() => clearTimeout(slow));
+    } finally {
+      this.exporting = false;
+    }
     const v = this.video;
     openExportDialog({
       heading, summary, ranges: list,
-      media: this.media, hasVideo: this.hasVideo,
-      frame: this.hasVideo && v.videoWidth ? { width: v.videoWidth, height: v.videoHeight } : null,
+      media: this.src, hasVideo: info.hasVideo,
+      frame: info.frame,
+      previewFrame: this.hasVideo && v.videoWidth ? { width: v.videoWidth, height: v.videoHeight } : null,
+      previewName: this.full ? this.media?.name : undefined,
+      sourceNote: info.note,
       video: v,
-      stem: stemOf(this.media?.name ?? this.title),
+      stem: stemOf(this.src?.name ?? this.title),
       fileName,
       settings: this.settings,
       words: this.words, lang: this.t.language,

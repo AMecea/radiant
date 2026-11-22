@@ -6,7 +6,8 @@ import type { TimeRange } from "./ranges";
  * it never reaches the server) and the query string; the fragment wins.
  *
  *   words  URL of a <stem>.words.json (or segment .txt)
- *   media  URL of the audio/video file
+ *   media  URL of the audio/video file, played in the editor (can be a light preview)
+ *   full   URL of the full-quality original, used for exports, commands and plans
  *   tx     the transcript itself, deflate-raw + base64url compressed (compact form)
  *   title  display title
  *   clips  "s-e,s-e,…" one clip's segments (seconds or clock times)
@@ -22,6 +23,8 @@ import type { TimeRange } from "./ranges";
 export interface LinkParams {
   words?: string;
   media?: string;
+  /** full-quality original for exports (`media` is then only the preview) */
+  full?: string;
   tx?: string;
   title?: string;
   clips?: TimeRange[];
@@ -67,6 +70,8 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   const words = get("words"), media = get("media"), tx = get("tx"), title = get("title");
   if (words) out.words = words;
   if (media) out.media = media;
+  const full = get("full");
+  if (full) out.full = full;
   if (tx) out.tx = tx;
   if (title) out.title = title;
   const dw = get("dw"), dg = get("dg"), fx = get("fx");
@@ -94,6 +99,7 @@ export function buildLink(base: string, p: LinkParams): string {
   const h = new URLSearchParams();
   if (p.title) h.set("title", p.title);
   if (p.media) h.set("media", p.media);
+  if (p.full) h.set("full", p.full);
   if (p.words) h.set("words", p.words);
   if (p.reels?.length) h.set("reels", encodeReels(p.reels));
   else if (p.clips?.length) h.set("clips", encodeRanges(p.clips));

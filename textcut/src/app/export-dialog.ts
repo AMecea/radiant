@@ -23,10 +23,18 @@ export interface ExportContext {
   /** one line under the heading, e.g. what was removed */
   summary?: string;
   ranges: readonly Clip[];
+  /** what the export reads: the full-quality original, or the played media */
   media: MediaSource | null;
   hasVideo: boolean;
-  /** source frame size (null when unknown / audio) */
+  /** frame size of `media` (null when unknown / audio): the job's crop & resize numbers */
   frame: Frame | null;
+  /** frame size of the played video, for the crop preview (default: `frame`) */
+  previewFrame?: Frame | null;
+  /** set when the editor plays a lighter preview than `media`: its name */
+  previewName?: string;
+  /** a caveat about the source, shown under the summary */
+  sourceNote?: string;
+  /** the editor's (preview) player: the crop preview draws its current frame */
   video: HTMLVideoElement;
   stem: string;
   /** default output name (without extension); `<stem>_cut` otherwise */
@@ -128,8 +136,9 @@ export function openExportDialog(ctx: ExportContext): void {
       });
       const sync: Array<() => void> = [];
       const changed = () => { save(); sync.forEach((f) => f()); update(); };
-      if (d.id === "crop" && ctx.frame) {
-        const prev = cropPreview(ctx.video, ctx.frame, op, changed);
+      const view = ctx.previewFrame ?? ctx.frame;
+      if (d.id === "crop" && view) {
+        const prev = cropPreview(ctx.video, view, ctx.frame, op, changed);
         sync.push(prev.sync);
         body.append(prev.el);
       }
@@ -234,6 +243,9 @@ export function openExportDialog(ctx: ExportContext): void {
   const body = h("div", {},
     h("p", {}, `${ranges.length} range${ranges.length === 1 ? "" : "s"}, ${fmtDur(total)} total.`,
       ctx.summary ? h("span", { class: "muted" }, ` ${ctx.summary}`) : null),
+    ctx.previewName && media ? h("p", { class: "muted" }, "Source: ", h("strong", {}, media.name),
+      ` — full quality (the editor plays ${ctx.previewName}).`) : null,
+    ctx.sourceNote ? h("p", { class: "notice" }, ctx.sourceNote) : null,
     h("h4", {}, "Format"), modeList,
     h("h4", {}, "Processing"), opsBox,
     preset ? h("p", { class: "notice" }, "Opened from a shared link: run it here, or copy the command / plan below.") : null,
@@ -372,10 +384,14 @@ function fieldInput(f: Field, st: OpState, changed: () => void): { el: HTMLEleme
  * The current frame with the crop box on top; drag the box to move it. Works for
  * cross-origin media too (the canvas is only drawn, never read back).
  */
-function cropPreview(video: HTMLVideoElement, frame: Frame, st: OpState, changed: () => void): { el: HTMLElement; sync: () => void } {
+function cropPreview(video: HTMLVideoElement, view: Frame, out: Frame | null, st: OpState,
+                     changed: () => void): { el: HTMLElement; sync: () => void } {
   const maxW = 560, maxH = 260;
-  const k = Math.min(maxW / frame.width, maxH / frame.height);
-  const cw = Math.round(frame.width * k), ch = Math.round(frame.height * k);
+  const k = Math.min(maxW / view.width, maxH / view.height);
+  const cw = Math.round(view.width * k), ch = Math.round(view.height * k);
+  // The box is placed in relative terms, on the exported frame's size when known
+  // (a full-quality original), else on the preview's.
+  const frame = out ?? view;
   const canvas = h("canvas", { width: cw, height: ch });
   try { canvas.getContext("2d")!.drawImage(video, 0, 0, cw, ch); } catch { /* no frame yet */ }
   const box = h("div", { class: "crop-box", title: "Drag to position" });
@@ -388,7 +404,7 @@ function cropPreview(video: HTMLVideoElement, frame: Frame, st: OpState, changed
       left: `${(r.x / frame.width) * 100}%`, top: `${(r.y / frame.height) * 100}%`,
       width: `${(r.w / frame.width) * 100}%`, height: `${(r.h / frame.height) * 100}%`,
     });
-    dims.textContent = `${r.w}×${r.h}`;
+    dims.textContent = out ? `${r.w}×${r.h}` : `${Math.round((r.w / frame.width) * 100)}% × ${Math.round((r.h / frame.height) * 100)}%`;
   };
   let drag: { x: number; y: number; cx: number; cy: number } | null = null;
   box.addEventListener("pointerdown", (e) => {

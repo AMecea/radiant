@@ -105,6 +105,7 @@ host's server. `?…` works too.
 |---------|---------|
 | `words` | URL of the `.words.json` (or a segment-level `.txt`; its word times are interpolated) |
 | `media` | URL of the audio/video. Anything the browser plays: mp4/webm/mov (H.264), mp3, m4a, wav, ogg, opus, flac |
+| `full`  | optional URL of the full-quality original. Exports, the captions preview, ffmpeg commands and radiant plans read it, while the editor plays `media` (see *Preview and full-quality media*) |
 | `tx`    | the transcript itself, compressed (deflate + base64url). The start page builds this |
 | `title` | display title |
 | `at`    | start position: `83.5` or `1:23.5` |
@@ -126,13 +127,40 @@ transcript** in the link, so the transcript needs no hosting: a 2-minute transcr
 about 3 KB of link, and an hour is roughly 50–100 KB. In the editor, **Share** and
 **🔗 Link** (the current selection) build the same kind of link, including your clips.
 
+### Preview and full-quality media
+
+A link can carry two versions of the recording: `media`, a light preview (e.g. 480p
+H.264) that the editor plays while you navigate, search and listen, and `full`, the
+original (4K, ProRes, a big `.mov`…) that the final media is made from:
+
+```
+#media=https://x.org/talk_480p.mp4&full=https://x.org/talk.mov&words=https://x.org/talk.words.json
+```
+
+- **Plays the preview:** clicking words, playback, the clip ▶ buttons, and the crop
+  frame you drag in the export dialog.
+- **Reads the original:** *Export*, the captions **▶ Preview** render, the ffmpeg
+  command, the radiant plan, the clip copy formats (radiant steps, ffmpeg) and the
+  output file names. The export dialog names the source it reads.
+- The original's frame size comes from its metadata, so crop and resize numbers are
+  in its pixels. If the browser can't open it (ProRes, BRAW…), crop and resize are
+  written as ffmpeg expressions relative to the real size instead, and the dialog
+  says so.
+- Both versions must have the same timing (same start, same length) and the same
+  aspect ratio.
+- `full` alone works too: it is then played as well. Picking or dropping another
+  media file in the editor replaces both versions.
+- The start page's link builder has a *Full-quality URL* field. *Check URLs* tests that
+  the original can be read for exports (CORS, Range requests). It doesn't need to be
+  playable. Shared links and export links (`x=`) keep both URLs.
+
 ### Hosting requirements
 
 - **Media playback** works from any public, direct file URL. No CORS is needed.
 - **Fetching the transcript** (`words=`) needs the host to send CORS headers. GitHub
   raw, gists, Dropbox (`dl.dropboxusercontent.com`) and S3/R2/GCS buckets with CORS
   enabled all work. If yours doesn't, embed the transcript instead (`tx=`).
-- **Exporting from a URL** also reads the media bytes, so it needs CORS too. With HTTP
+- **Exporting from a URL** also reads the media bytes (of `full` when it's given), so it needs CORS too. With HTTP
   Range support, ffmpeg reads only what it needs (see below). Without it, the whole
   file is downloaded first, and a native WAV cut is not possible. Local files have no
   such limits.

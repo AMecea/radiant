@@ -141,3 +141,42 @@ export async function probeUrl(url: string): Promise<{ ranges: boolean; size: nu
   }
   return { ranges, size };
 }
+
+export interface MediaInfo {
+  /** the browser could read the metadata */
+  ok: boolean;
+  hasVideo: boolean;
+  width: number;
+  height: number;
+  duration: number;
+}
+
+/**
+ * Read a media's frame size and duration through a detached <video> (metadata only,
+ * no CORS needed). `ok: false` when the browser can't open it (ProRes, BRAW, …) or
+ * it takes longer than `ms`.
+ */
+export function probeMediaInfo(src: MediaSource, ms = 15_000): Promise<MediaInfo> {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.muted = true;
+    const url = src.kind === "file" ? URL.createObjectURL(src.file) : src.url;
+    const done = (info: MediaInfo) => {
+      clearTimeout(timer);
+      v.onloadedmetadata = v.onerror = null;
+      v.removeAttribute("src");
+      v.load();
+      if (src.kind === "file") URL.revokeObjectURL(url);
+      resolve(info);
+    };
+    const fail = () => done({ ok: false, hasVideo: false, width: 0, height: 0, duration: 0 });
+    const timer = setTimeout(fail, ms);
+    v.onloadedmetadata = () => done({
+      ok: true, hasVideo: v.videoWidth > 0, width: v.videoWidth, height: v.videoHeight,
+      duration: Number.isFinite(v.duration) ? v.duration : 0,
+    });
+    v.onerror = fail;
+    v.src = url;
+  });
+}

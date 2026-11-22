@@ -90,6 +90,15 @@ describe("processing ops", () => {
     expect(cropRect({ aspect: "9:16", size: 100, cx: 0.5, cy: 0.5 }, f)).toEqual({ w: 608, h: 1080, x: 656, y: 0 });
     expect(cropRect({ aspect: "1:1", size: 50, cx: 0, cy: 1 }, f)).toEqual({ w: 540, h: 540, x: 0, y: 540 });
   });
+  it("crops by expressions when the frame size is unknown (an unprobed full-quality original)", () => {
+    const crop = (p: Record<string, string | number>) =>
+      opFilters(normalizeOps([{ id: "crop", on: true, p }]), null, true).video;
+    expect(crop({ aspect: "9:16" })).toEqual(["crop=w=trunc(min(iw\\,ih*9/16)/2)*2:h=trunc(min(ih\\,iw/(9/16))/2)*2"]);
+    expect(crop({ aspect: "1:1", size: 50, cx: 0.25, cy: 1 })).toEqual([
+      "crop=w=trunc(min(iw\\,ih*1/1)*0.5/2)*2:h=trunc(min(ih\\,iw/(1/1))*0.5/2)*2" +
+      ":x=trunc(clip(0.25*iw-ow/2\\,0\\,iw-ow)/2)*2:y=trunc(clip(1*ih-oh/2\\,0\\,ih-oh)/2)*2",
+    ]);
+  });
   it("chains crop → scale with the cropped size", () => {
     const ops = normalizeOps([{ id: "crop", on: true, p: { aspect: "1:1" } }, { id: "scale", on: true, p: { short: "720" } },
                               { id: "loudnorm", on: true, p: {} }]);

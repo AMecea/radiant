@@ -156,6 +156,17 @@ describe("links", () => {
     expect(p.sel).toEqual({ s: 3, e: 4 });
     expect(p.at).toBe(5.25);
   });
+  it("carries a full-quality original next to the preview media", () => {
+    const url = buildLink("https://x.test/textcut/", {
+      media: "https://cdn.test/talk_480p.mp4", full: "https://cdn.test/talk.mov", words: "w.json",
+    });
+    expect(url).toContain("media=https://cdn.test/talk_480p.mp4&full=https://cdn.test/talk.mov");
+    const u = new URL(url);
+    const p = readLink({ search: u.search, hash: u.hash });
+    expect(p.media).toBe("https://cdn.test/talk_480p.mp4");
+    expect(p.full).toBe("https://cdn.test/talk.mov");
+    expect(readLink({ search: "", hash: "#words=w.json" }).full).toBeUndefined();
+  });
   it("query works too, fragment wins", () => {
     const p = readLink({ search: "?media=q&at=1:00", hash: "#media=h" });
     expect(p.media).toBe("h");

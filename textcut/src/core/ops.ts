@@ -113,11 +113,19 @@ export const OPS: OpDef[] = [
     defaults: { aspect: "9:16", size: 100, cx: 0.5, cy: 0.5 },
     build(p, f) {
       if (!f) {
-        // Size unknown: let ffmpeg compute the biggest centred box of that aspect.
+        // Size unknown (e.g. a full-quality original the browser can't probe): the same
+        // box as cropRect, in ffmpeg expressions — aspect, size and centre are relative.
         const [aw, ah] = String(p.aspect).split(":").map(Number);
         if (!aw || !ah) return null;
         const r = `${aw}/${ah}`;
-        return { filter: `crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/(${r}))/2)*2`, frame: null };
+        const size = clamp(Number(p.size ?? 100), 5, 100) / 100;
+        const cx = clamp(Number(p.cx ?? 0.5), 0, 1), cy = clamp(Number(p.cy ?? 0.5), 0, 1);
+        const k = size < 1 ? `*${size}` : "";
+        let filter = `crop=w=trunc(min(iw\\,ih*${r})${k}/2)*2:h=trunc(min(ih\\,iw/(${r}))${k}/2)*2`;
+        if (cx !== 0.5 || cy !== 0.5) {
+          filter += `:x=trunc(clip(${cx}*iw-ow/2\\,0\\,iw-ow)/2)*2:y=trunc(clip(${cy}*ih-oh/2\\,0\\,ih-oh)/2)*2`;
+        }
+        return { filter, frame: null };
       }
       const c = cropRect(p, f);
       if (c.w >= f.width - 1 && c.h >= f.height - 1) return null;
