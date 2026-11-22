@@ -41,6 +41,11 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
 - **Extend or shorten a segment** with the `« ‹ › »` buttons on its *Start* and *End*:
   `‹ ›` move that edge by one word, `« »` by a phrase (to the next sentence end or
   pause). The segment stays on word boundaries and the transcript shows its new extent.
+- **Frame** (under the player) shows the frame the export keeps, i.e. its *Crop*, on
+  the video, with the rest dimmed. Drag the bar at its top to move it left/right (and
+  up/down when the crop is smaller than the picture). It is the same setting as
+  *Export → Processing → Crop*, where the aspect and size are chosen; one position for
+  all clips.
 - **CC** on a clip puts the transcript on screen for that clip, with your spelling fixes
   and without the words you deleted. The player shows the captions while the clip plays
   (inside the crop frame, when a crop is set), and the clip's **Export…** opens with

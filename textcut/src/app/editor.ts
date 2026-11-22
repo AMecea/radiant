@@ -40,7 +40,6 @@ interface CapState {
   ranges: TimeRange[];
   /** the frame the captions sit in (the crop, or the whole picture), in source pixels */
   box: { x: number; y: number; w: number; h: number };
-  cropped: boolean;
 }
 
 export interface EditorInit {
@@ -123,6 +122,11 @@ export class Editor {
   /** what the caption overlay currently shows, to repaint only on change */
   private capShown = "";
   private capFonts = new Set<string>();
+  /** the crop frame as drawn on the player, to redraw only on change */
+  private frameShown = "";
+  private frameChk!: HTMLInputElement;
+  private frameLbl!: HTMLElement;
+  private onDialogClose = (): void => this.paintCaptions();
   /** until when (performance.now) a sample caption shows where the captions sit */
   private capHint = 0;
   private searchInput!: HTMLInputElement;
@@ -185,7 +189,14 @@ export class Editor {
 
     this.video = h("video", { playsInline: true, preload: "auto" });
     this.video.playbackRate = s.rate;
-    this.cropEl = h("div", { class: "cap-frame", hidden: true });
+    const grip = h("div", { class: "cap-grip", title: "Drag to move the frame the export keeps" }, "⇔ drag");
+    this.cropEl = h("div", { class: "cap-frame", hidden: true }, grip);
+    this.bindFrameDrag(grip);
+    this.frameChk = h("input", { type: "checkbox", onchange: () => this.setFrame(this.frameChk.checked) });
+    this.frameLbl = h("span", {}, "Frame");
+    const frameToggle = h("label", {
+      class: "chk", title: "Show the frame the export keeps (its Crop) on the video, and drag it into place",
+    }, this.frameChk, this.frameLbl);
     this.capEl = h("div", { class: "cap-overlay", hidden: true });
     this.playerBox = h("div", { class: "player" }, this.video, this.cropEl, this.capEl);
     new ResizeObserver(() => { this.capShown = ""; this.paintCaptions(); }).observe(this.playerBox);
@@ -198,7 +209,10 @@ export class Editor {
     const transport = h("div", { class: "transport" }, this.playBtn, this.timeEl, h("span", { class: "spacer" }), rate,
       this.toggle("Follow", "Keep the current word in view", "follow"),
       this.toggle("Skip pauses", "Jump over pauses while playing (preview of a tightened cut)", "skipPauses"),
-      this.toggle("Skip cuts", "Jump over deleted words and pauses while playing (preview the edit)", "previewEdits"));
+      this.toggle("Skip cuts", "Jump over deleted words and pauses while playing (preview the edit)", "previewEdits"),
+      frameToggle);
+    // The export dialog changes the crop and the captions: catch up when it closes.
+    document.addEventListener("close", this.onDialogClose, true);
 
     this.timeline = new Timeline({
       seek: (t) => this.seek(t),
@@ -1121,6 +1135,73 @@ export class Editor {
     toast(`Captions ${y}% from the top`, "info", 1200);
   }
 
+  // -------------------------------------------------------- the export's frame on the player
+
+  /** Where the picture sits inside the player (it is letterboxed): scale and offset. */
+  private pictureGeom(): { k: number; ox: number; oy: number } | null {
+    const v = this.video;
+    if (!this.hasVideo || !v.videoWidth || !v.clientWidth) return null;
+    const k = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight);
+    return { k, ox: v.offsetLeft + (v.clientWidth - v.videoWidth * k) / 2, oy: v.offsetTop + (v.clientHeight - v.videoHeight * k) / 2 };
+  }
+
+  /** Turn the export's crop on or off (the same switch as Export → Crop). */
+  private setFrame(on: boolean): void {
+    const ops = normalizeOps(this.settings.ops);
+    ops.find((o) => o.id === "crop")!.on = on;
+    this.settings.ops = ops;
+    saveSettings(this.settings);
+    this.paintCaptions();
+    if (on) toast("The export keeps what's inside the frame — drag its top bar to move it. Aspect and size are in Export → Crop", "info", 5000);
+  }
+
+  /** Dragging the frame's bar moves the crop, like dragging the box in the export dialog. */
+  private bindFrameDrag(grip: HTMLElement): void {
+    let drag: { x: number; y: number; cx: number; cy: number } | null = null;
+    grip.addEventListener("pointerdown", (e) => {
+      const crop = normalizeOps(this.settings.ops).find((o) => o.id === "crop")!;
+      drag = { x: e.clientX, y: e.clientY, cx: Number(crop.p.cx), cy: Number(crop.p.cy) };
+      try { grip.setPointerCapture(e.pointerId); } catch { /* the drag still works while the pointer stays on the bar */ }
+      e.preventDefault();
+    });
+    grip.addEventListener("pointermove", (e) => {
+      const g = this.pictureGeom();
+      if (!drag || !g) return;
+      const v = this.video, frame = { width: v.videoWidth, height: v.videoHeight };
+      const ops = normalizeOps(this.settings.ops);
+      const crop = ops.find((o) => o.id === "crop")!;
+      const cx = drag.cx + (e.clientX - drag.x) / (frame.width * g.k), cy = drag.cy + (e.clientY - drag.y) / (frame.height * g.k);
+      // Store the clamped centre, so dragging past an edge doesn't build up slack.
+      const r = cropRect({ ...crop.p, cx, cy }, frame);
+      crop.p.cx = +((r.x + r.w / 2) / frame.width).toFixed(4);
+      crop.p.cy = +((r.y + r.h / 2) / frame.height).toFixed(4);
+      this.settings.ops = ops;
+      this.paintCaptions();
+    });
+    const end = () => { if (drag) saveSettings(this.settings); drag = null; };
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  }
+
+  /** Draw the export's crop frame over the video (whenever a crop is set). */
+  private paintFrame(): void {
+    const crop = normalizeOps(this.settings.ops).find((o) => o.id === "crop")!;
+    if (this.frameChk.checked !== crop.on) this.frameChk.checked = crop.on;
+    const label = `Frame ${String(crop.p.aspect ?? "")}`.trim();
+    if (this.frameLbl.textContent !== label) this.frameLbl.textContent = label;
+    const g = crop.on ? this.pictureGeom() : null;
+    const v = this.video;
+    const sig = g ? `${JSON.stringify(crop.p)}|${v.videoWidth}x${v.videoHeight}|${g.k.toFixed(5)}|${g.ox}|${g.oy}` : "off";
+    if (sig === this.frameShown) return;
+    this.frameShown = sig;
+    this.cropEl.hidden = !g;
+    if (!g) return;
+    const r = cropRect(crop.p, { width: v.videoWidth, height: v.videoHeight });
+    Object.assign(this.cropEl.style, {
+      left: `${g.ox + r.x * g.k}px`, top: `${g.oy + r.y * g.k}px`, width: `${r.w * g.k}px`, height: `${r.h * g.k}px`,
+    });
+  }
+
   /** The captions of the current clip, laid out as its export would draw them. */
   private captionState(reel: Reel): CapState {
     const v = this.video;
@@ -1138,7 +1219,7 @@ export class Editor {
     });
     this.loadCaptionFont(layout.fontName);
     this.capShown = "";
-    return (this.capState = { key, layout, ranges, box, cropped: crop.on });
+    return (this.capState = { key, layout, ranges, box });
   }
 
   /** The export's font, for the preview (the same files the export downloads). */
@@ -1156,10 +1237,11 @@ export class Editor {
    * animation differ a little). With a crop set, the frame it keeps is outlined.
    */
   private paintCaptions(t = this.video.currentTime || 0): void {
+    this.paintFrame();
     const reel = this.reels[this.active];
-    const v = this.video;
-    if (!reel?.cc || !reel.parts.length || !this.hasVideo || !v.videoWidth || !v.clientWidth) {
-      if (this.capShown !== "off") { this.capEl.hidden = this.cropEl.hidden = true; this.capShown = "off"; }
+    const g = this.pictureGeom();
+    if (!reel?.cc || !reel.parts.length || !g) {
+      if (this.capShown !== "off") { this.capEl.hidden = true; this.capShown = "off"; }
       return;
     }
     const c = this.captionState(reel);
@@ -1175,16 +1257,13 @@ export class Editor {
     // the word being spoken: the last one that has started
     let wi = -1;
     if (chunk && !sample) chunk.words.forEach((w, i) => { if (w.s <= out) wi = i; });
-    const k = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight);
+    const { k, ox, oy } = g;
     const sig = `${c.key}|${ci}|${wi}|${k.toFixed(4)}|${out >= 0}|${sample}`;
     if (sig === this.capShown) return;
     this.capShown = sig;
 
-    // where the picture is inside the player (it's letterboxed), then the caption frame in it
-    const ox = v.offsetLeft + (v.clientWidth - v.videoWidth * k) / 2, oy = v.offsetTop + (v.clientHeight - v.videoHeight * k) / 2;
+    // the frame the captions sit in: the crop, or the whole picture
     const bx = ox + c.box.x * k, by = oy + c.box.y * k, bw = c.box.w * k, bh = c.box.h * k;
-    this.cropEl.hidden = !c.cropped || (out < 0 && !sample);
-    Object.assign(this.cropEl.style, { left: `${bx}px`, top: `${by}px`, width: `${bw}px`, height: `${bh}px` });
 
     const el = this.capEl;
     el.hidden = !chunk;
@@ -1768,6 +1847,7 @@ export class Editor {
 
   destroy(): void {
     if (this.keyHandler) document.removeEventListener("keydown", this.keyHandler);
+    document.removeEventListener("close", this.onDialogClose, true);
     cancelAnimationFrame(this.raf);
     this.video.pause();
     this.video.removeAttribute("src");
