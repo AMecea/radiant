@@ -1,6 +1,7 @@
 import { buildLink, normalizeUrl, packJson, type LinkParams } from "../core/link";
 import { compactTranscript } from "../core/transcript";
 import { fmtShort } from "../core/time";
+import { APP_NAME } from "../core/app";
 import { copyText, fmtBytes, h } from "./dom";
 import {
   isMediaFile, isTranscriptFile, loadTranscriptFile, loadTranscriptUrl, mediaFromFile, probeUrl,
@@ -167,7 +168,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
 
   return h("div", { class: "app open-view" },
     h("header", { class: "hero" },
-      h("h1", {}, "textcut"),
+      h("h1", {}, APP_NAME),
       h("p", {}, "Navigate, search and cut audio & video by its transcript. Click a word to jump there, " +
         "select words to select the audio, copy in/out times for reels, cut out the pauses, export the cut. " +
         "Runs entirely in your browser — nothing is uploaded.")),
@@ -213,7 +214,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
             ["clips", "clip list — 10-20.5,30-41"],
             ["recs", "URL of a .clips.json with recommended clips (default: the one next to the .words.json)"],
           ] as const).map(([k, d]) => h("tr", {}, h("td", {}, h("code", {}, k)), h("td", {}, d)))),
-        h("p", { class: "muted mono" }, "…/textcut/#media=https://x.org/talk.mp4&words=https://x.org/talk.words.json&at=1:23"))),
+        h("p", { class: "muted mono" }, "https://<this page>/#media=https://x.org/talk.mp4&words=https://x.org/talk.words.json&at=1:23"))),
   );
 }
 

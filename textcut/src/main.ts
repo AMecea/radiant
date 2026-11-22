@@ -1,4 +1,5 @@
 import "./style.css";
+import { APP_NAME } from "./core/app";
 import { readLink, unpackJson, type LinkParams } from "./core/link";
 import { parseRecs, siblingRecsUrl } from "./core/recs";
 import { h, toast } from "./app/dom";
@@ -16,7 +17,7 @@ let editor: Editor | null = null;
 function showOpen(error?: string, prefill?: LinkParams): void {
   editor?.destroy();
   editor = null;
-  document.title = "textcut";
+  document.title = APP_NAME;
   app.replaceChildren(openView(startEditor, error, prefill));
 }
 
@@ -31,7 +32,7 @@ function startEditor(r: OpenResult): void {
   });
   app.replaceChildren(editor.root);
   editor.mounted();
-  document.title = `${r.link.title || r.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "")} · textcut`;
+  document.title = `${r.link.title || r.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "")} · ${APP_NAME}`;
 }
 
 async function boot(): Promise<void> {

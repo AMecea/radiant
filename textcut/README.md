@@ -1,4 +1,8 @@
-# textcut
+# textcut (rReelIT)
+
+The app shows itself as **rReelIT** (page title, top bar, start page; set in
+`src/core/app.ts`). The code, this folder, the storage keys and the files an export
+writes keep the name textcut.
 
 Navigate, search and cut audio/video **by its transcript**, in the browser. It is the
 companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.words.json`).

@@ -4,6 +4,7 @@ import {
 import { findPauses, mergeRanges, moveEdge, rangeOf, splitAtPauses, wordsIn, type Pause, type TimeRange, type WordRange } from "../core/ranges";
 import { buildSearchIndex, search, type SearchIndex } from "../core/search";
 import { fmtDur, fmtShort, fmtTime } from "../core/time";
+import { APP_NAME } from "../core/app";
 import { CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
 import {
   encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
@@ -168,7 +169,7 @@ export class Editor {
     this.searchCount = h("span", { class: "count" });
 
     const top = h("header", { class: "topbar" },
-      h("button", { class: "brand", title: "Open other files / build a link", onclick: () => this.init.onOpenOther() }, "textcut"),
+      h("button", { class: "brand", title: "Open other files / build a link", onclick: () => this.init.onOpenOther() }, APP_NAME),
       h("div", { class: "doc-title" },
         h("strong", {}, this.title),
         h("span", { class: "muted" },
