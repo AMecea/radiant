@@ -53,18 +53,44 @@ steps:
       remote: "${vars.video_dir}"
       public: true
 
-  - id: transcribe                 # outputs: transcript (start<TAB>end<TAB>text), words (.words.json if word_timestamps: true)
+  - id: transcribe                 # outputs: transcript (start<TAB>end<TAB>text), words (.words.json)
     action: transcribe
     needs: [master]
     with:
       input: "${steps.master.file}"
       language: ro
+      word_timestamps: true        # textcut and `recommend` read the .words.json
+
+  - id: upload_words               # textcut opens it with words=<this url>
+    action: upload
+    needs: [transcribe]
+    with:
+      file: "${steps.transcribe.words}"
+      remote: "${vars.video_dir}"
+      public: true
+
+  - id: recommend                  # outputs: clips (<stem>.clips.json, the reel / short proposals)
+    action: recommend
+    needs: [transcribe]
+    with:
+      words: "${steps.transcribe.words}"
+      count: 12
+      guidance: "Sunday sermon; the clips go on the church's Instagram and YouTube Shorts."
+      # command: "claude -p"       # use a logged-in Claude Code instead of ANTHROPIC_API_KEY
+
+  - id: upload_clips               # next to the .words.json, so textcut lists them by itself
+    action: upload
+    needs: [recommend]
+    with:
+      file: "${steps.recommend.clips}"
+      remote: "${vars.video_dir}"
+      public: true
 
   - id: pick_timestamps            # manual checkpoint — exits 0 and notifies
     action: pause
     needs: [transcribe]
     with:
-      message: "Read the transcript and set reel start/end, then resume with --step reel-"
+      message: "Pick the reel in textcut (see the recommended clips) and set start/end, then resume with --step reel-"
 
   - id: reel                       # outputs: file
     action: clip

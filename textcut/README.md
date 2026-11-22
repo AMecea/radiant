@@ -191,6 +191,9 @@ original (4K, ProRes, a big `.mov`…) that the final media is made from:
 
 textcut doesn't pick the clips itself. It shows what a `<stem>.clips.json` says, so the
 picking can be done by whoever reads the transcript best: a person, a script, an LLM.
+radiant's `recommend` step writes one from the `.words.json` (see the
+[main README](../README.md#recommend--reel--short-proposals)); upload it next to the
+transcript and the proposals appear by themselves.
 
 ```json
 { "v": 1, "clips": [

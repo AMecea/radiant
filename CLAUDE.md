@@ -45,7 +45,7 @@ deploy to GitHub Pages).
 - `radiant/steps/base.py` — `Step`, `Param`, `Output`, `StepContext`, `PauseSignal`.
 - `radiant/steps/__init__.py` — the action registry.
 - Steps: `ffmpeg` (general), `trim` (subclasses `FfmpegStep`), `concat`, `clip`, `encode`,
-  `sync`, `transcribe`, `upload`, `upload_stream`, `youtube`, `shell`, `pipe`, `pause`,
+  `sync`, `transcribe`, `recommend`, `upload`, `upload_stream`, `youtube`, `shell`, `pipe`, `pause`,
   `braw_decode`.
 
 Adding or changing a step: declare its `params` / `outputs` on the step class (that is
@@ -79,5 +79,8 @@ keys and generated file names still say `textcut`.
 - The `transcribe` step (with `word_timestamps: true`) writes `<stem>.words.json`, which
   textcut opens. Changing that format means changing `radiant/steps/transcribe.py` and
   `textcut/src/core/transcript.ts` together.
+- The `recommend` step writes `<stem>.clips.json` (recommended clips), which textcut reads
+  when it sits next to the `.words.json`. Changing that format means changing
+  `radiant/steps/recommend.py` and `textcut/src/core/recs.ts` together.
 - `textcut/src/core/radiant.ts` emits a plan for radiant's `ffmpeg` step, so parameter
   changes in `radiant/steps/ffmpeg.py` must be mirrored there.
