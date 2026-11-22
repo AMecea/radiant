@@ -34,6 +34,28 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   play and **Export…** button, and its segments can be reordered, removed, sorted, split
   at pauses, or copied as a radiant plan, radiant `trim`/`clip` steps, an ffmpeg command,
   CSV, JSON or SRT.
+- **Extend or shorten a segment** with the `« ‹ › »` buttons on its *Start* and *End*:
+  `‹ ›` move that edge by one word, `« »` by a phrase (to the next sentence end or
+  pause). The segment stays on word boundaries and the transcript shows its new extent.
+- **CC** on a clip puts the transcript on screen for that clip, with your spelling fixes
+  and without the words you deleted. The player shows the captions while the clip plays
+  (inside the crop frame, when a crop is set), and the clip's **Export…** opens with
+  *Captions* on. Style, font, size, colour and position are set there, under
+  *Processing → Captions*; the player preview follows them. **▲ ▼** next to CC move the
+  captions up or down 3% at a time (the same *Position from top* setting, shared by all
+  clips); paused between captions, a sample shows the new position for a moment. The preview matches the
+  export's words, grouping, size and position; outlines and animation are drawn by the
+  browser, so they differ slightly from the final render.
+- **Your own caption font**: in *Processing → Captions*, **Use your own font…** takes a
+  `.ttf` or `.otf` (not `.woff`). It is kept in this browser only, shows up in the *Font*
+  list, and is used by the player preview and the in-browser export. A copied ffmpeg
+  command or radiant plan can't download it, so it checks that the file is in
+  `textcut_fonts/` and stops with a message if it isn't. One font of your own at a time.
+- **Recommended clips**: proposals for reels and shorts, listed under *Clips* when the
+  recording has a `<stem>.clips.json` (see [Recommended clips](#recommended-clips)). Each
+  one has a title, a 0–100 score and the reason it should work. ▶ plays it, a click
+  shows its words in the transcript, and **+ Clip** turns it into a normal clip that you
+  trim, extend and export like any other. They also show as a thin band on the timeline.
 - **Export** the edit, the clips or a selection, with optional **processing**: *crop* to
   9:16 / 1:1 / 4:5… (drag the frame on a preview), *resize*, *captions*, *reduce noise*,
   *normalise loudness*. *Smooth joins* adds 10 ms audio fades at every cut, so word-level cuts
@@ -116,6 +138,8 @@ host's server. `?…` works too.
 | `dg`    | deleted pauses, by index of the word before them + 1 (`0` = leading silence): `0,14` |
 | `fx`    | spelling fixes, `index~text` joined by `\|`: `3~Kenobi\|10~two words` |
 | `x`     | an export to open on arrival: ranges, format, processing, file name (compressed JSON) |
+| `recs`  | URL of a `.clips.json` with recommended clips. Without it, the file next to `words` is tried (`x.words.json` → `x.clips.json`) |
+| `rx`    | the recommended clips themselves, compressed like `tx` |
 
 ```
 https://<host>/textcut/#media=https://x.org/talk.mp4&words=https://x.org/talk.words.json&sel=1:23.5-1:31
@@ -153,6 +177,28 @@ original (4K, ProRes, a big `.mov`…) that the final media is made from:
 - The start page's link builder has a *Full-quality URL* field. *Check URLs* tests that
   the original can be read for exports (CORS, Range requests). It doesn't need to be
   playable. Shared links and export links (`x=`) keep both URLs.
+
+### Recommended clips
+
+textcut doesn't pick the clips itself. It shows what a `<stem>.clips.json` says, so the
+picking can be done by whoever reads the transcript best: a person, a script, an LLM.
+
+```json
+{ "v": 1, "clips": [
+  { "title": "Why hasn't he come yet?", "score": 92, "tags": ["question"],
+    "why": "Opens on a question and answers it within the clip.",
+    "ranges": [[21.36, 34.48], [1817.62, 1853.72]] }
+] }
+```
+
+- `ranges` are seconds (or clock times) in the recording, played back to back. One range
+  is the usual case; two or more make a clip that skips what's between them. They don't
+  need to be exact: each range is snapped to the words it covers, then padded like a
+  selection.
+- `score` (0–100), `why` and `tags` are optional. The list is shown best first.
+- Put the file next to the transcript (`talk.words.json` → `talk.clips.json`) and the
+  same link picks it up. Or name it with `recs=`, pack it into the link with `rx=`, or
+  drop it onto the editor. The host needs CORS, as for `words=`.
 
 ### Hosting requirements
 

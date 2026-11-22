@@ -17,6 +17,7 @@
   --hit-strong: #e0a800;
   --clip: #2f9e44;
   --clip-soft: rgba(47, 158, 68, 0.55);
+  --rec: #6741d9;
   --pause: #8c8a84;
   --pause-bg: #ecebe6;
   --error: #c92a2a;
@@ -49,6 +50,7 @@
     --hit-strong: #ffd43b;
     --clip: #51cf66;
     --clip-soft: rgba(81, 207, 102, 0.55);
+    --rec: #b197fc;
     --pause: #8f8d85;
     --pause-bg: #2c2c29;
     --error: #ff6b6b;
@@ -148,10 +150,25 @@ kbd {
 .right .notice { margin: 0 20px 10px; }
 
 .player {
-  position: relative; background: #000; border-radius: var(--radius); overflow: hidden;
+  background: #000; border-radius: var(--radius); overflow: hidden;
   aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
+  /* never squeezed by the lists below it, and still in view while they scroll */
+  flex: none; position: sticky; top: 0; z-index: 3;
 }
 .player video { width: 100%; height: 100%; display: block; }
+.cap-overlay {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: none; z-index: 2;
+  color: #fff; text-align: center; line-height: 1.2; font-weight: 800; width: max-content;
+  paint-order: stroke fill; border-radius: .2em; overflow-wrap: normal;
+}
+.cap-overlay[hidden], .cap-frame[hidden] { display: none; }
+.cap-frame {
+  position: absolute; pointer-events: none; z-index: 1;
+  outline: 1px dashed rgba(255, 255, 255, .7); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .5);
+}
+button.cc { font-weight: 700; font-size: 11.5px; letter-spacing: .04em; }
+.reel-head { flex-wrap: wrap; }
+.reel-head button.cc-move { padding: 3px 5px; font-size: 10px; min-width: 0; }
 .player.audio-only, .player.no-media { aspect-ratio: auto; background: var(--panel); border: 1px solid var(--border); }
 .player.audio-only video { display: none; }
 .player.audio-only::before { content: "♪ audio"; color: var(--muted); padding: 10px; font-size: 12px; }
@@ -227,9 +244,35 @@ strong.reel-name { overflow: hidden; text-overflow: ellipsis; white-space: nowra
 .clips li.now { outline: 2px solid var(--clip); }
 .clip-body { flex: 1; min-width: 0; cursor: pointer; font-size: 12.5px; }
 .clip-text { color: var(--muted); font-family: var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg-edges { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.seg-edges .grp { display: inline-flex; align-items: center; gap: 2px; }
+.seg-edges small { color: var(--muted); font-size: 11px; margin-right: 3px; }
+.seg-edges button { padding: 0 6px; min-width: 22px; font-size: 13px; line-height: 1.5; }
 .clip-actions { display: flex; gap: 2px; }
 .clip-actions button { padding: 2px 6px; min-width: 24px; font-size: 12px; }
 .clips select { max-width: 200px; }
+
+.recs {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.recs[hidden] { display: none; }
+.recs header { display: flex; align-items: center; gap: 8px; }
+.recs h3 { margin: 0; font-size: 14px; }
+.recs header .muted { font-size: 12.5px; }
+.recs ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.recs li {
+  display: flex; align-items: flex-start; gap: 8px; padding: 6px; border-radius: 7px;
+  border-left: 3px solid var(--rec); background: var(--panel-2);
+}
+.recs li.now { outline: 2px solid var(--rec); }
+.recs li.made { border-left-color: var(--clip); }
+.rec-score { min-width: 2.2em; text-align: center; font-weight: 700; color: var(--rec); padding-top: 1px; }
+.rec-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rec-title .muted { font-size: 12px; }
+.rec-why { color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 2px; }
+.recs .clip-actions { align-items: center; }
+.recs .clip-actions button { white-space: nowrap; }
 
 /* transcript */
 .transcript {
@@ -357,6 +400,7 @@ details summary { cursor: pointer; color: var(--muted); }
   .editor-view { height: auto; }
   .editor { display: flex; flex-direction: column; }
   .left { border-right: 0; border-bottom: 1px solid var(--border); overflow: visible; }
+  .player { position: relative; }
   .transcript { padding: 4px 16px 30vh; font-size: 16.5px; overflow: visible; }
   .seg { grid-template-columns: 1fr; gap: 0; }
   .seg .ts { text-align: left; padding: 0; }

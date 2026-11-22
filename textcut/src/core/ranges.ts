@@ -1,4 +1,4 @@
-import type { Word } from "./transcript";
+import { endsSentence, type Word } from "./transcript";
 
 export interface TimeRange {
   s: number;
@@ -64,6 +64,33 @@ export function rangeOf(words: readonly Word[], a: number, b: number, pad = 0, d
   if (lo > 0) s = Math.max(s, Math.min(wl.s, (words[lo - 1]!.e + wl.s) / 2));
   if (hi < words.length - 1) e = Math.min(e, Math.max(wh.e, (wh.e + words[hi + 1]!.s) / 2));
   return { s: Math.max(0, s), e: Math.min(duration || Infinity, e) };
+}
+
+/**
+ * Move one edge of the word range a..b earlier (`dir` -1) or later (+1): by one
+ * word, or — given `phrasePause` — to the next place speech naturally breaks, a
+ * sentence end or a pause of at least that many seconds. (Pauses count because
+ * transcripts are not always punctuated.) The range never becomes empty and
+ * never leaves the transcript; when the edge can't move, the same range comes back.
+ */
+export function moveEdge(words: readonly Word[], r: WordRange, edge: "start" | "end", dir: -1 | 1, phrasePause?: number): WordRange {
+  const n = words.length;
+  let { a, b } = r;
+  // does speech break between word i and word i + 1?
+  const breaks = (i: number) => phrasePause == null || i < 0 || i >= n - 1
+    || endsSentence(words[i]!.w) || words[i + 1]!.s - words[i]!.e >= phrasePause;
+  if (edge === "end") {
+    let j = b + dir;
+    if (dir > 0) while (j < n - 1 && !breaks(j)) j++;
+    else while (j > a && !breaks(j)) j--;
+    b = Math.max(a, Math.min(n - 1, j));
+  } else {
+    let j = a + dir;
+    if (dir < 0) while (j > 0 && !breaks(j - 1)) j--;
+    else while (j < b && !breaks(j - 1)) j++;
+    a = Math.min(b, Math.max(0, j));
+  }
+  return { a, b };
 }
 
 /** Merge overlapping or touching ranges; output sorted by start. */

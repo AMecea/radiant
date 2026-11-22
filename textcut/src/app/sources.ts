@@ -3,6 +3,7 @@
 
 import { parseTranscript, type Transcript } from "../core/transcript";
 import { normalizeUrl, unpackJson } from "../core/link";
+import { parseRecs, type Rec } from "../core/recs";
 
 export type MediaSource =
   | { kind: "url"; url: string; name: string }
@@ -26,6 +27,7 @@ export function isMediaFile(f: File): boolean {
   return /^(audio|video)\//.test(f.type) || MEDIA_EXT.test(f.name);
 }
 export function isTranscriptFile(f: File): boolean {
+  if (isRecsFile(f)) return false;
   return TRANSCRIPT_EXT.test(f.name) || f.type === "application/json" || f.type === "text/plain";
 }
 
@@ -54,6 +56,18 @@ export async function loadTranscriptUrl(url: string): Promise<LoadedTranscript> 
   }
   if (!res.ok) throw new Error(`Transcript fetch failed: HTTP ${res.status} ${res.statusText}`);
   return { transcript: parseTranscript(await res.text()), origin: { kind: "url", url }, name: baseName(direct) };
+}
+
+/** A `<stem>.clips.json` (recommended clips) rather than a transcript. */
+export function isRecsFile(f: File): boolean {
+  return /\.clips\.json$/i.test(f.name);
+}
+
+/** Recommended clips from a URL. Throws when it can't be fetched or read. */
+export async function loadRecsUrl(url: string): Promise<Rec[]> {
+  const res = await fetch(normalizeUrl(url));
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return parseRecs(await res.text());
 }
 
 export async function loadTranscriptFile(file: File): Promise<LoadedTranscript> {

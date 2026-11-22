@@ -17,6 +17,7 @@ import { copyText, download, fmtBytes, h, modal, toast } from "./dom";
 import { exportWav, runCut } from "./export";
 import { saveSettings, type Settings } from "./settings";
 import type { MediaSource } from "./sources";
+import { removeUserFont, setUserFont, userFont } from "./userfont";
 
 export interface ExportContext {
   heading: string;
@@ -44,6 +45,10 @@ export interface ExportContext {
   words?: ReadonlyArray<{ s: number; e: number; w: string }>;
   /** transcript language */
   lang?: string;
+  /** a clip's own captions switch: opens the dialog with captions on / off, whatever was used last */
+  captions?: boolean;
+  /** the captions switch was changed in the dialog */
+  onCaptions?: (on: boolean) => void;
   /** opened from a shared link: its format & processing (the user's settings stay untouched) */
   preset?: ExportPreset | null;
   /** a link that opens the editor on this export */
@@ -96,6 +101,12 @@ export function openExportDialog(ctx: ExportContext): void {
   let ac: AbortController | null = null;
   const previewBtns = new Set<HTMLButtonElement>();
   let mode: ModeDef = modes.find((m) => m.id === (preset?.m ?? s.exportMode)) ?? modes[0]!;
+  if (ctx.captions != null && !preset) {
+    const cap = st.ops.find((o) => o.id === "captions");
+    if (cap) cap.on = ctx.captions;
+    // captions are drawn on the video: that needs the mode that re-encodes it
+    if (ctx.captions && !mode.video) mode = modes.find((m) => m.video) ?? mode;
+  }
   const save = () => {
     if (preset) return;
     Object.assign(s, { exportMode: mode.id, ops: st.ops, smoothJoins: st.smooth, useVars: st.vars });
@@ -132,7 +143,10 @@ export function openExportDialog(ctx: ExportContext): void {
       const body = h("div", { class: "op-body", hidden: !op.on });
       const on = h("input", {
         type: "checkbox", checked: op.on,
-        onchange: () => { op.on = on.checked; body.hidden = !op.on; save(); update(); },
+        onchange: () => {
+          op.on = on.checked; body.hidden = !op.on; save(); update();
+          if (d.id === "captions") ctx.onCaptions?.(op.on);
+        },
       });
       const sync: Array<() => void> = [];
       const changed = () => { save(); sync.forEach((f) => f()); update(); };
@@ -149,11 +163,47 @@ export function openExportDialog(ctx: ExportContext): void {
         grid.append(r.el);
       }
       body.append(grid);
+      if (d.id === "captions") body.append(ownFontRow(op, changed));
       if (d.id === "captions" && media) body.append(previewBox());
       opsBox.append(h("div", { class: "op" },
         h("label", { class: "chk op-head" }, on, h("strong", {}, d.label), h("small", { class: "muted" }, d.help)),
         body));
     }
+  }
+
+  /** Captions in a font of the user's own: pick a .ttf / .otf, or drop the one in use. */
+  function ownFontRow(op: OpState, changed: () => void): HTMLElement {
+    const mine = userFont();
+    const input = h("input", {
+      type: "file", accept: ".ttf,.otf,font/ttf,font/otf", hidden: true,
+      onchange: async () => {
+        const f = input.files?.[0];
+        if (!f) return;
+        try {
+          op.p.font = await setUserFont(f);
+          toast(`Captions now use ${op.p.font}`);
+        } catch (e) {
+          toast((e as Error).message, "err", 6000);
+          return;
+        }
+        changed();
+        renderOps();
+      },
+    });
+    return h("div", { class: "row own-font" },
+      h("button", { onclick: () => input.click(), title: "Use a font file of your own (.ttf or .otf) for the captions. It stays in this browser." },
+        mine ? "Change your font…" : "Use your own font…"),
+      input,
+      mine ? h("span", { class: "muted" }, `${mine.name} (${mine.file})`) : h("span", { class: "muted" }, ".ttf or .otf — kept in this browser"),
+      mine ? h("button", {
+        class: "linkish", title: "Forget your font; captions go back to a built-in one",
+        onclick: async () => {
+          if (op.p.font === mine.name) op.p.font = "";
+          await removeUserFont();
+          changed();
+          renderOps();
+        },
+      }, "remove") : null);
   }
 
   // ---------------------------------------------------------------- command / plan

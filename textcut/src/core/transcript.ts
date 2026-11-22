@@ -224,6 +224,11 @@ export interface Line {
 
 const SENTENCE_END = /[.?!…]["'»”)\]]*$/;
 
+/** Whether a word closes a sentence (by its punctuation). */
+export function endsSentence(w: string): boolean {
+  return SENTENCE_END.test(w);
+}
+
 export function parseLineMode(v: unknown): LineMode {
   if (v === "sentence") return "sentence";
   const n = Number(v);

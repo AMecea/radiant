@@ -40,6 +40,10 @@ interface FontDef {
   /** average advance of upper / lower-case letters, in em (for line fitting) */
   upper: number;
   lower: number;
+  /** file name in the fonts directory (default: the URL's last part) */
+  file?: string;
+  /** the user's own file: `url` is a blob in this browser, nobody else can download it */
+  local?: boolean;
 }
 
 /** ASS font name (the font's family name) → where to get it and its metrics. */
@@ -55,13 +59,31 @@ export interface FontFile {
   /** file name inside the fonts directory */
   file: string;
   url: string;
+  /** the user's own font: a command can't download it, the file has to be put there */
+  local?: boolean;
+}
+
+const BUILT_IN = new Set(Object.keys(FONTS));
+
+/**
+ * Make another font usable for captions (the user's own file). `name` must be the
+ * font's family name, since that is what libass looks for. A built-in font's name
+ * is left alone. Returns the name to select.
+ */
+export function registerFont(name: string, def: FontDef): string {
+  if (!BUILT_IN.has(name)) FONTS[name] = def;
+  return name;
+}
+
+export function unregisterFont(name: string): void {
+  if (!BUILT_IN.has(name)) delete FONTS[name];
 }
 
 const fontDef = (name: string): FontDef => FONTS[name] ?? FONTS["Poppins ExtraBold"]!;
 
 export function fontFile(name: string): FontFile {
-  const url = fontDef(name).url;
-  return { file: url.split("/").pop()!, url };
+  const def = fontDef(name);
+  return { file: def.file ?? def.url.split("/").pop()!, url: def.url, ...(def.local ? { local: true } : {}) };
 }
 
 // ------------------------------------------------------------------ styles
@@ -266,6 +288,47 @@ function display(w: string, st: CaptionStyle, upper: boolean, lang?: string): st
   return assText(s);
 }
 
+/** How a cut's captions are laid out: what the ASS script and a live preview share. */
+export interface CaptionLayout {
+  style: CaptionStyle;
+  fontName: string;
+  /** letter size (em), in the frame's pixels */
+  em: number;
+  upper: boolean;
+  /** accent colour, #RRGGBB */
+  accent: string;
+  /** vertical centre, 0 (top) … 1 (bottom) of the frame */
+  y: number;
+  /** the captions, timed on the cut's output timeline, their words as displayed */
+  chunks: Chunk[];
+}
+
+export function captionLayout(words: readonly CaptionWord[], ranges: readonly TimeRange[],
+                              frame: Frame, o: Partial<CaptionOptions> = {}): CaptionLayout {
+  const opt = { ...CAPTION_DEFAULTS, ...o };
+  const st = captionStyle(opt.style);
+  const W = Math.round(frame.width), H = Math.round(frame.height);
+  const unit = Math.min(W, H);
+  const fontName = opt.font && FONTS[opt.font] ? opt.font : st.font;
+  const font = fontDef(fontName);
+  const em = unit * (Number(opt.size) > 0 ? clamp(Number(opt.size), 1, 50) / 100 : st.size);
+  const upper = opt.case === "upper" || (opt.case !== "asis" && st.upper);
+  const maxWords = Number(opt.words) > 0 ? Number(opt.words) : st.words;
+  const margin = Math.round(W * 0.07);
+  // More words than the style's default → allow proportionally longer captions,
+  // but no more than fits on the style's lines at this size.
+  const perLine = (W - 2 * margin) / (em * (upper ? font.upper : font.lower));
+  const maxChars = Math.max(4, Math.min(Math.max(st.chars, Math.round((st.chars / st.words) * maxWords)),
+    Math.floor(perLine * st.lines)));
+  const accent = /^#[0-9a-f]{6}$/i.test(opt.accent) ? opt.accent : CAPTION_DEFAULTS.accent;
+  const shown = wordsOnCut(words, ranges).map((w) => ({ ...w, w: display(w.w, st, upper, opt.lang) }))
+    .filter((w) => w.w.trim() !== "");
+  return {
+    style: st, fontName, em, upper, accent, y: clamp(Number(opt.y), 0.05, 0.95),
+    chunks: chunkWords(shown, maxWords, maxChars),
+  };
+}
+
 export interface CaptionScript {
   ass: string;
   /** the font the script uses */
@@ -280,28 +343,15 @@ export interface CaptionScript {
  */
 export function captionScript(words: readonly CaptionWord[], ranges: readonly TimeRange[],
                               frame: Frame, o: Partial<CaptionOptions> = {}): CaptionScript {
-  const opt = { ...CAPTION_DEFAULTS, ...o };
-  const st = captionStyle(opt.style);
+  const { style: st, fontName, em, accent, y: yFrac, chunks } = captionLayout(words, ranges, frame, o);
   const W = Math.round(frame.width), H = Math.round(frame.height);
-  const unit = Math.min(W, H);
-  const fontName = opt.font && FONTS[opt.font] ? opt.font : st.font;
-  const font = fontDef(fontName);
-  const em = unit * (Number(opt.size) > 0 ? clamp(Number(opt.size), 1, 50) / 100 : st.size);
-  const size = Math.round(em * font.lh); // the ASS size that renders letters `em` tall
-  const upper = opt.case === "upper" || (opt.case !== "asis" && st.upper);
-  const maxWords = Number(opt.words) > 0 ? Number(opt.words) : st.words;
+  const size = Math.round(em * fontDef(fontName).lh); // the ASS size that renders letters `em` tall
   const margin = Math.round(W * 0.07);
-  // More words than the style's default → allow proportionally longer captions,
-  // but no more than fits on the style's lines at this size.
-  const perLine = (W - 2 * margin) / (em * (upper ? font.upper : font.lower));
-  const maxChars = Math.max(4, Math.min(Math.max(st.chars, Math.round((st.chars / st.words) * maxWords)),
-    Math.floor(perLine * st.lines)));
-  const accent = /^#[0-9a-f]{6}$/i.test(opt.accent) ? opt.accent : CAPTION_DEFAULTS.accent;
 
   const white = assColor("#FFFFFF");
   const outlineW = Math.max(1, Math.round(em * st.outline));
   const shadowW = Math.round(em * st.shadow);
-  const x = Math.round(W / 2), y = Math.round(H * clamp(Number(opt.y), 0.05, 0.95));
+  const x = Math.round(W / 2), y = Math.round(H * yFrac);
 
   // karaoke: SecondaryColour is the not-yet-sung text, PrimaryColour the sung.
   const primary = st.mode === "karaoke" ? assColor(accent) : white;
@@ -310,10 +360,6 @@ export function captionScript(words: readonly CaptionWord[], ranges: readonly Ti
     "Cap", fontName, size, primary, white, outlineC, assColor("#000000", 0x80),
     0, 0, 0, 0, 100, 100, 0, 0, st.box ? 3 : 1, outlineW, shadowW, 5, margin, margin, 0, 1,
   ].join(",");
-
-  const shown = wordsOnCut(words, ranges).map((w) => ({ ...w, w: display(w.w, st, upper, opt.lang) }))
-    .filter((w) => w.w.trim() !== "");
-  const chunks = chunkWords(shown, maxWords, maxChars);
 
   const pos = `\\an5\\pos(${x},${y})`;
   const pop = st.pop ? "\\fscx78\\fscy78\\t(0,90,\\fscx106\\fscy106)\\t(90,150,\\fscx100\\fscy100)" : "";

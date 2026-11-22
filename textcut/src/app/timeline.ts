@@ -21,6 +21,7 @@ export class Timeline {
   private words: readonly Word[] = [];
   private pauses: readonly Pause[] = [];
   private clips: readonly TimeRange[] = [];
+  private recs: readonly TimeRange[] = [];
   private removed: readonly TimeRange[] = [];
   private hits: number[] = [];
   private sel: TimeRange | null = null;
@@ -51,6 +52,7 @@ export class Timeline {
     this.invalidate();
   }
   setClips(c: readonly TimeRange[]): void { this.clips = c; this.invalidate(); }
+  setRecs(r: readonly TimeRange[]): void { this.recs = r; this.invalidate(); }
   setRemoved(r: readonly TimeRange[]): void { this.removed = r; this.invalidate(); }
   setHits(times: number[]): void { this.hits = times; this.invalidate(); }
   setSel(r: TimeRange | null): void { this.sel = r; this.draw(); }
@@ -107,6 +109,9 @@ export class Timeline {
       const mid = Math.round(top + sh / 2) - dpr;
       for (const r of this.removed) g.fillRect(this.x(r.s), mid, Math.max(1, this.x(r.e) - this.x(r.s)), 2 * dpr);
     }
+    // Recommended clips: a thin band just above the clips'.
+    g.fillStyle = this.css("--rec");
+    for (const r of this.recs) g.fillRect(this.x(r.s), H - 9 * dpr, Math.max(2, this.x(r.e) - this.x(r.s)), 3 * dpr);
     // Clips: band along the bottom.
     g.fillStyle = this.css("--clip");
     for (const r of this.clips) g.fillRect(this.x(r.s), H - 5 * dpr, Math.max(2, this.x(r.e) - this.x(r.s)), 5 * dpr);

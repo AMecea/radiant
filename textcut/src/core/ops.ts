@@ -98,6 +98,16 @@ export function cropRect(p: Params, f: Frame): { w: number; h: number; x: number
   return { w, h, x, y };
 }
 
+/** The captions' font choices; rebuilt in place when a font is registered. */
+const FONT_OPTIONS: Array<[string, string]> = [];
+
+/** Bring the font choices in line with the registered fonts (after adding / removing one). */
+export function refreshFontOptions(): void {
+  FONT_OPTIONS.splice(0, FONT_OPTIONS.length, ["", "Style default"],
+    ...Object.entries(FONTS).map(([name, def]): [string, string] => [name, def.local ? `${name} — your font` : name]));
+}
+refreshFontOptions();
+
 export const OPS: OpDef[] = [
   {
     id: "crop",
@@ -159,7 +169,7 @@ export const OPS: OpDef[] = [
     stream: "video",
     fields: [
       { key: "style", label: "Style", type: "select", options: CAPTION_STYLES.map((c) => [c.id, c.label]) },
-      { key: "font", label: "Font", type: "select", options: [["", "Style default"], ...Object.keys(FONTS).map((f): [string, string] => [f, f])] },
+      { key: "font", label: "Font", type: "select", options: FONT_OPTIONS },
       {
         key: "size", label: "Size (% of width)", type: "select",
         options: [["0", "Style default"], ...[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20].map((n): [string, string] => [String(n), String(n)])],
@@ -186,6 +196,10 @@ export const OPS: OpDef[] = [
         words: Number(p.words), case: String(p.case), lang: env.lang,
       });
       if (!cap.count) return null;
+      if (cap.font.local) {
+        notes.push(`${cap.font.file} is your own font: the browser export has it, but a command or plan ` +
+          `run elsewhere needs the file in ${env.fontsDir}/.`);
+      }
       const path = `${env.tmp}captions.ass`;
       return {
         filter: `ass=filename=${filterArg(path)}:fontsdir=${filterArg(env.fontsDir)}`,
