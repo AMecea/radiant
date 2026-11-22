@@ -10,10 +10,11 @@ import {
   encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
-import { placeRecs, recsFile, type PlacedRec, type Rec } from "../core/recs";
+import { parseRecs, placeRecs, recsFile, type PlacedRec, type Rec, type RecsFile } from "../core/recs";
+import { buildRecPrompt, promptLines, readRecAnswer } from "../core/recprompt";
 import { captionLayout, FONTS, type CaptionLayout } from "../core/captions";
 import { cropRect, normalizeOps } from "../core/ops";
-import { copyText, h, isTyping, modal, toast } from "./dom";
+import { copyText, download, h, isTyping, modal, toast } from "./dom";
 import { loadJson, loadSettings, saveJson, saveSettings, type Settings } from "./settings";
 import {
   mediaFromFile, mediaFromUrl, probeMediaInfo, stemOf, type LoadedTranscript, type MediaInfo, type MediaSource,
@@ -57,6 +58,8 @@ type PlayMode =
   | { kind: "until"; e: number }
   | { kind: "loop"; r: TimeRange }
   | { kind: "queue"; list: TimeRange[]; i: number; rec?: number };
+
+const ASK_AI_KEY = "textcut.askai.v1";
 
 export class Editor {
   readonly t: Transcript;
@@ -146,6 +149,7 @@ export class Editor {
     this.recomputePauses();
     this.renderTranscript();
     this.restoreClips();
+    this.restoreRecs();
     this.restoreEdits();
     this.setMedia(init.media);
     this.setFull(init.full ?? null);
@@ -225,7 +229,7 @@ export class Editor {
     this.selBar = h("div", { class: "selbar" });
     this.editsEl = h("section", { class: "edits" });
     this.clipsEl = h("section", { class: "clips" });
-    this.recsEl = h("section", { class: "recs", hidden: true });
+    this.recsEl = h("section", { class: "recs" });
     this.trEl = h("article", { class: "transcript", tabindex: "0", "aria-label": "Transcript" });
 
     const approx = this.words.some((w) => w.approx)
@@ -1018,12 +1022,32 @@ export class Editor {
 
   // ======================================================== recommended clips
 
+  private get recsKey(): string {
+    return this.clipsKey.replace(".clips.", ".recs.");
+  }
+
+  /** The recommendations this person brought themselves (an AI's answer, a dropped file). */
+  private restoreRecs(): void {
+    const saved = loadJson<RecsFile>(this.recsKey);
+    if (!saved) return this.renderRecs();
+    try { this.setRecs(parseRecs(saved)); } catch { this.renderRecs(); }
+  }
+
   /**
    * Show these recommended clips (replacing any shown before). `link` is how a
-   * shared link should name them; leave it out for a dropped file. Returns how
-   * many of them fall inside this transcript.
+   * shared link should name them; leave it out for a list the person brought
+   * themselves (an AI's answer, a dropped file). Their own list is kept in the
+   * browser for this recording and wins over the link's until they clear it.
+   * Returns how many clips are now shown.
    */
   setRecs(recs: readonly Rec[], link: Pick<LinkParams, "recs" | "rx"> | null = null): number {
+    if (link) {
+      if (loadJson<RecsFile>(this.recsKey)) return this.recs.length;
+    } else if (recs.length) {
+      saveJson(this.recsKey, recsFile(recs));
+    } else {
+      try { localStorage.removeItem(this.recsKey); } catch { /* private mode */ }
+    }
     this.recs = placeRecs(recs, this.words);
     this.recsLink = link;
     this.timeline.setRecs(this.recs.flatMap((r) => this.recRanges(r)));
@@ -1063,14 +1087,20 @@ export class Editor {
 
   private renderRecs(): void {
     const el = this.recsEl;
-    el.hidden = !this.recs.length;
     el.replaceChildren();
-    if (!this.recs.length) return;
     el.append(h("header", {},
       h("h3", {}, "Recommended"),
-      h("span", { class: "muted" }, `${this.recs.length} for reels & shorts`),
+      h("span", { class: "muted" }, this.recs.length ? `${this.recs.length} for reels & shorts` : "none yet"),
       h("span", { class: "spacer" }),
-      h("button", { class: "icon", title: "Hide the recommendations", onclick: () => this.setRecs([]) }, "✕")));
+      h("button", { title: "Get a prompt for the AI you use, and paste its answer back", onclick: () => this.openAskAi() }, "Ask an AI…"),
+      this.recs.length
+        ? h("button", { class: "icon", title: "Clear the recommendations", onclick: () => this.setRecs([]) }, "✕")
+        : null));
+    if (!this.recs.length) {
+      el.append(h("p", { class: "hint" }, "Passages worth posting as reels or shorts, picked from this transcript. ",
+        "“Ask an AI…” gives you a prompt for ChatGPT, Claude, Gemini or any other AI you use."));
+      return;
+    }
     const list = h("ol", {});
     this.recs.forEach((rec, i) => {
       const parts = this.recRanges(rec);
@@ -1095,6 +1125,76 @@ export class Editor {
     });
     el.append(list);
     this.highlightPlayingClip();
+  }
+
+  /**
+   * Recommendations from the person's own AI: we write the prompt, they run it
+   * wherever they like and paste the answer back. Nothing is sent from here.
+   */
+  private openAskAi(): void {
+    const lines = promptLines(this.words);
+    const saved = loadJson<{ count: number; min: number; max: number; notes: string }>(ASK_AI_KEY);
+    const num = (v: number, min: number, max: number) => h("input", { type: "number", min, max, step: 1, value: v });
+    const count = num(saved?.count ?? 12, 1, 40), lo = num(saved?.min ?? 20, 5, 600), hi = num(saved?.max ?? 90, 10, 900);
+    const notes = h("input", {
+      type: "text", value: saved?.notes ?? "",
+      placeholder: "e.g. for our church's Instagram; skip anything that needs the Bible passage on screen",
+    });
+    let language = this.t.language;
+    try { language = new Intl.DisplayNames(["en"], { type: "language" }).of(this.t.language) ?? language; } catch { /* keep the code */ }
+
+    const prompt = () => {
+      const n = (el: HTMLInputElement, d: number) => (Number(el.value) > 0 ? Number(el.value) : d);
+      const o = { count: Math.round(n(count, 12)), min: n(lo, 20), max: Math.max(n(hi, 90), n(lo, 20)), notes: notes.value.trim() };
+      saveJson(ASK_AI_KEY, o);
+      return buildRecPrompt(lines, { count: o.count, minSeconds: o.min, maxSeconds: o.max, language, guidance: o.notes });
+    };
+    const size = h("span", { class: "muted" });
+    const sized = () => { size.textContent = `${lines.length} lines · ${prompt().length.toLocaleString("en")} characters`; };
+    for (const el of [count, lo, hi, notes]) el.addEventListener("input", sized);
+    sized();
+    const copied = h("span", { class: "ask-ai-ok", role: "status" });
+    const stem = this.init.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "") || "transcript";
+
+    const answer = h("textarea", { rows: 7, spellcheck: false, placeholder: "Paste the AI's whole answer here" });
+    const error = h("p", { class: "ask-ai-err", role: "alert", hidden: true });
+    const show = h("button", {
+      class: "primary",
+      onclick: () => {
+        try {
+          const n = this.setRecs(readRecAnswer(answer.value, lines));
+          if (!n) throw new Error("None of the clips in the answer fall inside this transcript.");
+          dlg.close();
+          toast(`${n} recommended clip${n > 1 ? "s" : ""} — play them, then “+ Clip” the ones you want`);
+          this.recsEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } catch (e) {
+          error.textContent = (e as Error).message;
+          error.hidden = false;
+        }
+      },
+    }, "Show the clips");
+
+    const dlg = modal("Recommended clips from your AI", h("div", { class: "ask-ai" },
+      h("p", {}, `${APP_NAME} doesn't talk to an AI itself. Copy the prompt, paste it into the one you use `,
+        "(ChatGPT, Claude, Gemini, DeepSeek…), then paste its answer back here."),
+      h("h4", {}, "1 · The prompt"),
+      h("div", { class: "ask-ai-row" },
+        h("label", { class: "inline" }, "Clips", count),
+        h("label", { class: "inline" }, "Each", lo, "to", hi, "seconds")),
+      h("label", { class: "ask-ai-notes" }, "Notes for the AI (optional)", notes),
+      h("div", { class: "ask-ai-row" },
+        h("button", {
+          class: "primary",
+          onclick: () => void copyText(prompt(), "Prompt copied").then(() => { copied.textContent = "Copied — now paste it into your AI."; }),
+        }, "Copy the prompt"),
+        h("button", {
+          title: "For an AI that takes a long text better as an attached file",
+          onclick: () => download(prompt(), `${stem}.prompt.txt`, "text/plain"),
+        }, "Download as .txt"),
+        size),
+      copied,
+      h("h4", {}, "2 · Its answer"),
+      answer, error), [show]);
   }
 
   private exportReel(i: number): void {

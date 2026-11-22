@@ -61,7 +61,8 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   command or radiant plan can't download it, so it checks that the file is in
   `textcut_fonts/` and stops with a message if it isn't. One font of your own at a time.
 - **Recommended clips**: proposals for reels and shorts, listed under *Clips* when the
-  recording has a `<stem>.clips.json` (see [Recommended clips](#recommended-clips)). Each
+  recording has a `<stem>.clips.json`, or after *Ask an AI…* — a prompt for the AI you
+  already use, whose answer you paste back (see [Recommended clips](#recommended-clips)). Each
   one has a title, a 0–100 score and the reason it should work. ▶ plays it, a click
   shows its words in the transcript, and **+ Clip** turns it into a normal clip that you
   trim, extend and export like any other. They also show as a thin band on the timeline.
@@ -211,6 +212,19 @@ transcript and the proposals appear by themselves.
 - Put the file next to the transcript (`talk.words.json` → `talk.clips.json`) and the
   same link picks it up. Or name it with `recs=`, pack it into the link with `rx=`, or
   drop it onto the editor. The host needs CORS, as for `words=`.
+
+**From your own AI.** With no file at all, *Ask an AI…* in the Recommended section
+writes the prompt for you: the instructions plus the transcript as numbered lines that
+end where the speaker does (with your spelling fixes). Copy it — or download it as a
+`.txt` to attach — into ChatGPT, Claude, Gemini, DeepSeek or whatever you use, then
+paste the answer back and the list appears. Nothing is sent from the app, and no key
+is needed. The AI answers with line numbers rather than times, so its clips always
+start and end on a phrase boundary. You can set how many clips, how long, and add
+notes for the AI (who the audience is, what to avoid).
+
+A list you brought yourself (an AI's answer, a dropped file) is kept in the browser
+for that recording and shown instead of the link's until you clear it with ✕. Sharing
+the link carries it along (`rx=`).
 
 ### Hosting requirements
 

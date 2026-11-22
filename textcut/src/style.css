@@ -279,6 +279,16 @@ strong.reel-name { overflow: hidden; text-overflow: ellipsis; white-space: nowra
 .rec-why { color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 2px; }
 .recs .clip-actions { align-items: center; }
 .recs .clip-actions button { white-space: nowrap; }
+.recs .hint { font-size: 12.5px; }
+
+.ask-ai h4 { margin-top: 10px; }
+.ask-ai-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.ask-ai .inline { display: inline-flex; align-items: center; gap: 6px; }
+.ask-ai input[type="number"] { width: 5em; }
+.ask-ai-notes { display: flex; flex-direction: column; gap: 4px; }
+.ask-ai-ok { color: var(--muted); font-size: 12.5px; min-height: 1.2em; }
+.ask-ai-err { color: var(--error); }
+.ask-ai-err[hidden] { display: none; }
 
 /* transcript */
 .transcript {

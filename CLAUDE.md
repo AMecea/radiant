@@ -63,8 +63,9 @@ supplies. `examples/` holds sample plans. The `video-pipeline` skill
   audio filter ops), `captions` (burned-in ASS captions), `formats` (clip export
   formats), `radiant` (emits a radiant plan), `link` (shareable URL encoding), `recs`
   (recommended clips read from a `<stem>.clips.json`; textcut shows them, it does not
-  pick them), `fontfile` (reads a user's own .ttf / .otf for captions), `app` (the name
-  the app shows).
+  pick them), `recprompt` (the prompt for a user's own AI, and reading its answer
+  back), `fontfile` (reads a user's own .ttf / .otf for captions), `app` (the name the
+  app shows).
 - `src/app/` — UI: `editor` (main `Editor` class), `timeline`, `open-view`,
   `export-dialog`, `export`, `ffmpeg-client` + `ffmpeg-worker` (ffmpeg.wasm), `sources`,
   `settings`, `userfont` (the user's caption font, kept in IndexedDB), `dom`.
@@ -82,5 +83,8 @@ keys and generated file names still say `textcut`.
 - The `recommend` step writes `<stem>.clips.json` (recommended clips), which textcut reads
   when it sits next to the `.words.json`. Changing that format means changing
   `radiant/steps/recommend.py` and `textcut/src/core/recs.ts` together.
+- The prompt that picks the clips exists twice: `radiant/steps/recommend.py` (run
+  unattended) and `textcut/src/core/recprompt.ts` ("Ask an AI…", pasted by hand), with
+  the same line-breaking rule and answer shape. Change them together.
 - `textcut/src/core/radiant.ts` emits a plan for radiant's `ffmpeg` step, so parameter
   changes in `radiant/steps/ffmpeg.py` must be mirrored there.
