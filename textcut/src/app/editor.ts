@@ -13,7 +13,7 @@ import {
 } from "../core/edits";
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
 import { parseRecs, placeRecs, recsFile, type PlacedRec, type Rec, type RecsFile } from "../core/recs";
-import { buildRecPrompt, promptLines, readRecAnswer } from "../core/recprompt";
+import { buildRecPrompt, promptLines, readRecAnswer, readRecLink, recLinkStub, type PromptLine } from "../core/recprompt";
 import { captionLayout, FONTS, type CaptionLayout } from "../core/captions";
 import { cropRect, normalizeOps } from "../core/ops";
 import { copyText, download, h, isTyping, modal, toast } from "./dom";
@@ -1211,9 +1211,38 @@ export class Editor {
    * Recommendations from the person's own AI: we write the prompt, they run it
    * wherever they like and paste the answer back. Nothing is sent from here.
    */
+  /** The transcript as the numbered lines an AI is given (the same for everybody who has the recording). */
+  private aiLines(): PromptLine[] {
+    return promptLines(this.words, undefined, undefined, this.origW);
+  }
+
+  /**
+   * The address an AI adds its clips to: this recording's link, ending in `ai=`.
+   * Null when the transcript isn't at a URL — a link to it would have to carry the
+   * whole transcript, which is too much to ask an AI to copy.
+   */
+  private aiLinkBase(nLines: number): string | null {
+    const o = this.init.loaded.origin;
+    if (o.kind !== "url") return null;
+    const p: LinkParams = { title: this.title, words: o.url, ai: recLinkStub(nLines) };
+    if (this.media?.kind === "url") p.media = this.media.url;
+    if (this.full?.kind === "url") p.full = this.full.url;
+    return buildLink(this.pageBase(), p);
+  }
+
+  /** Recommended clips that arrived on the link, written there by an AI. Returns how many are shown. */
+  useAiLink(value: string): number {
+    return this.setRecs(readRecLink(value, this.aiLines()));
+  }
+
   private openAskAi(): void {
-    const lines = promptLines(this.words);
-    const saved = loadJson<{ count: number; min: number; max: number; notes: string }>(ASK_AI_KEY);
+    const lines = this.aiLines();
+    const saved = loadJson<{ count: number; min: number; max: number; notes: string; as?: "link" | "json" }>(ASK_AI_KEY);
+    const linkBase = this.aiLinkBase(lines.length);
+    // With the media on this computer, the link would open the transcript without it.
+    const localMedia = this.media?.kind === "file";
+    const asLink = h("input", { type: "radio", name: "ask-ai-as", checked: !!linkBase && (saved?.as ?? (localMedia ? "json" : "link")) === "link" });
+    const asJson = h("input", { type: "radio", name: "ask-ai-as", checked: !asLink.checked });
     const num = (v: number, min: number, max: number) => h("input", { type: "number", min, max, step: 1, value: v });
     const count = num(saved?.count ?? 12, 1, 40), lo = num(saved?.min ?? 20, 5, 600), hi = num(saved?.max ?? 90, 10, 900);
     const notes = h("input", {
@@ -1225,18 +1254,33 @@ export class Editor {
 
     const prompt = () => {
       const n = (el: HTMLInputElement, d: number) => (Number(el.value) > 0 ? Number(el.value) : d);
-      const o = { count: Math.round(n(count, 12)), min: n(lo, 20), max: Math.max(n(hi, 90), n(lo, 20)), notes: notes.value.trim() };
+      const o = {
+        count: Math.round(n(count, 12)), min: n(lo, 20), max: Math.max(n(hi, 90), n(lo, 20)), notes: notes.value.trim(),
+        // keep the choice made where there was one
+        as: linkBase ? (asLink.checked ? "link" as const : "json" as const) : saved?.as,
+      };
       saveJson(ASK_AI_KEY, o);
-      return buildRecPrompt(lines, { count: o.count, minSeconds: o.min, maxSeconds: o.max, language, guidance: o.notes });
+      return buildRecPrompt(lines, {
+        count: o.count, minSeconds: o.min, maxSeconds: o.max, language, guidance: o.notes,
+        ...(linkBase && asLink.checked ? { link: linkBase } : {}),
+      });
     };
     const size = h("span", { class: "muted" });
     const sized = () => { size.textContent = `${lines.length} lines · ${prompt().length.toLocaleString("en")} characters`; };
+    const step2 = h("p", { class: "muted" });
+    const answerKind = () => {
+      step2.textContent = linkBase && asLink.checked
+        ? "The AI answers with a link: click it, and this recording opens with the clips in place. If the link doesn't open, paste the AI's answer here instead."
+        : "Paste the AI's whole answer here.";
+    };
     for (const el of [count, lo, hi, notes]) el.addEventListener("input", sized);
+    for (const el of [asLink, asJson]) el.addEventListener("change", () => { sized(); answerKind(); });
     sized();
+    answerKind();
     const copied = h("span", { class: "ask-ai-ok", role: "status" });
     const stem = this.init.loaded.name.replace(/\.words\.json$|\.json$|\.txt$/i, "") || "transcript";
 
-    const answer = h("textarea", { rows: 7, spellcheck: false, placeholder: "Paste the AI's whole answer here" });
+    const answer = h("textarea", { rows: 7, spellcheck: false, placeholder: "The AI's whole answer: its JSON, or its link" });
     const error = h("p", { class: "ask-ai-err", role: "alert", hidden: true });
     const show = h("button", {
       class: "primary",
@@ -1255,13 +1299,20 @@ export class Editor {
     }, "Show the clips");
 
     const dlg = modal("Recommended clips from your AI", h("div", { class: "ask-ai" },
-      h("p", {}, `${APP_NAME} doesn't talk to an AI itself. Copy the prompt, paste it into the one you use `,
-        "(ChatGPT, Claude, Gemini, DeepSeek…), then paste its answer back here."),
+      h("p", {}, `${APP_NAME} doesn't talk to an AI itself. Copy the prompt and paste it into the one you use `,
+        "(ChatGPT, Claude, Gemini, DeepSeek…); its answer brings the clips back here."),
       h("h4", {}, "1 · The prompt"),
       h("div", { class: "ask-ai-row" },
         h("label", { class: "inline" }, "Clips", count),
         h("label", { class: "inline" }, "Each", lo, "to", hi, "seconds")),
       h("label", { class: "ask-ai-notes" }, "Notes for the AI (optional)", notes),
+      linkBase ? h("div", { class: "ask-ai-row" },
+        h("span", {}, "The AI answers with"),
+        h("label", { class: "inline", title: "One click in the chat opens this recording with the clips. They are in the link, so it can be sent on" },
+          asLink, "a link to click"),
+        h("label", { class: "inline", title: "Copy its answer and paste it below. Carries tags too, and is the safer choice for a long list" },
+          asJson, "JSON to paste back"),
+        localMedia ? h("span", { class: "muted" }, "The link opens the transcript without your media file — you'd drop it in again.") : null) : null,
       h("div", { class: "ask-ai-row" },
         h("button", {
           class: "primary",
@@ -1274,7 +1325,7 @@ export class Editor {
         size),
       copied,
       h("h4", {}, "2 · Its answer"),
-      answer, error), [show]);
+      step2, answer, error), [show]);
   }
 
   private exportReel(i: number): void {

@@ -64,6 +64,17 @@ async function boot(): Promise<void> {
  * isn't there.
  */
 async function loadRecs(link: LinkParams, target: Editor): Promise<void> {
+  if (link.ai) {
+    // An AI wrote them onto the link: they are this person's list now, like a pasted answer.
+    try {
+      const n = target.useAiLink(link.ai);
+      toast(n ? `${n} recommended clip${n > 1 ? "s" : ""} from the AI's link — play them, then “+ Clip” the ones you want`
+              : "None of the clips in the link fall inside this transcript", n ? "ok" : "info", 4500);
+    } catch (e) {
+      toast(`The clips in the link: ${(e as Error).message}`, "err", 7000);
+    }
+    return;
+  }
   const guess = link.rx || link.recs || !link.words ? null : siblingRecsUrl(link.words);
   try {
     const recs = link.rx ? parseRecs(await unpackJson(link.rx))
