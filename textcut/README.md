@@ -258,6 +258,24 @@ run natively with the copied command.
 - Browser codec support decides what plays. HEVC, ProRes, BRAW and some MKVs won't play.
   Transcode them with radiant's `ffmpeg` step first (H.264/AAC MP4 or M4A).
 
+## On a phone
+
+On a narrow screen (up to 860 px wide) the page is one column: the player, which stays
+in view, then the clips and the recommendations. The transcript is not on the page; it
+opens over it, full screen, when you need it.
+
+- **See transcript** opens it to read, search, or tap a word to jump there. **Select
+  text** lets you pick words.
+- **Picking words is by tapping**: tap the first word, then the last. Another tap moves
+  the nearer end of the selection, so either end can be adjusted outwards or inwards.
+- **+ New clip** opens the transcript to pick the clip's text; **+ Make clip** creates
+  it. **+ Add text** on a clip adds another segment the same way.
+- **✎ Edit text** on a segment opens the transcript on its words. **✓ Update** makes
+  the segment the words now selected; **✎ Fix** corrects their spelling and **✂ Cut**
+  removes them from exports. **Done** closes the transcript.
+
+A mouse on a narrow window can still drag across the text to select it.
+
 ## Keyboard
 
 `Space` play/pause · `Enter` play selection · `L` loop · `A` add to the current clip ·

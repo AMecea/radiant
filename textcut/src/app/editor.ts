@@ -1,11 +1,13 @@
 import {
   gluesToPrev, parseLineMode, textOf, transcriptLines, wordAt, compactTranscript, type Transcript, type Word,
 } from "../core/transcript";
-import { findPauses, mergeRanges, moveEdge, rangeOf, splitAtPauses, wordsIn, type Pause, type TimeRange, type WordRange } from "../core/ranges";
+import {
+  findPauses, mergeRanges, moveEdge, rangeOf, splitAtPauses, tapSelect, wordsIn, type Pause, type TimeRange, type WordRange,
+} from "../core/ranges";
 import { buildSearchIndex, search, type SearchIndex } from "../core/search";
 import { fmtDur, fmtShort, fmtTime } from "../core/time";
 import { APP_NAME } from "../core/app";
-import { CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
+import { bothEnds, CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
 import {
   encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
@@ -60,6 +62,19 @@ type PlayMode =
   | { kind: "queue"; list: TimeRange[]; i: number; rec?: number };
 
 const ASK_AI_KEY = "textcut.askai.v1";
+
+/** Narrow screens (phones): one column, and the transcript is a sheet opened on demand. */
+const NARROW = "(max-width: 860px)";
+
+/** What the transcript sheet (narrow screens) was opened for. */
+type Sheet =
+  | { kind: "read" }
+  /** the text of a clip that doesn't exist yet */
+  | { kind: "new" }
+  /** one more segment for the current clip */
+  | { kind: "add" }
+  /** this segment's text: which words it covers, their spelling, cuts inside it */
+  | { kind: "segment"; reel: Reel; i: number };
 
 export class Editor {
   readonly t: Transcript;
@@ -137,6 +152,20 @@ export class Editor {
   private timeline!: Timeline;
   private loopBtn: HTMLButtonElement | null = null;
 
+  // narrow screens
+  private mq = window.matchMedia(NARROW);
+  /** why the transcript sheet is open; null: closed (always null on a wide screen) */
+  private sheet: Sheet | null = null;
+  /** taps on words pick the selection instead of jumping there */
+  private picking = false;
+  private topbar!: HTMLElement;
+  private searchBox!: HTMLElement;
+  private searchSlot!: HTMLElement;
+  private sheetBar!: HTMLElement;
+  private sheetPlay!: HTMLButtonElement;
+  private sheetTime!: HTMLElement;
+  private onLayout = (): void => this.syncLayout();
+
   constructor(private init: EditorInit) {
     this.t = init.loaded.transcript;
     this.words = this.t.words;
@@ -176,16 +205,17 @@ export class Editor {
     });
     this.searchCount = h("span", { class: "count" });
 
-    const top = h("header", { class: "topbar" },
+    this.searchBox = h("div", { class: "search" }, this.searchInput, this.searchCount,
+      h("button", { class: "icon", title: "Previous match (Shift+Enter)", onclick: () => this.stepHit(-1) }, "↑"),
+      h("button", { class: "icon", title: "Next match (Enter)", onclick: () => this.stepHit(1) }, "↓"));
+    const top = this.topbar = h("header", { class: "topbar" },
       h("button", { class: "brand", title: "Open other files / build a link", onclick: () => this.init.onOpenOther() }, APP_NAME),
       h("div", { class: "doc-title" },
         h("strong", {}, this.title),
         h("span", { class: "muted" },
           [this.t.language && this.t.language.toUpperCase(), `${this.words.length} words`]
             .filter(Boolean).join(" · "))),
-      h("div", { class: "search" }, this.searchInput, this.searchCount,
-        h("button", { class: "icon", title: "Previous match (Shift+Enter)", onclick: () => this.stepHit(-1) }, "↑"),
-        h("button", { class: "icon", title: "Next match (Enter)", onclick: () => this.stepHit(1) }, "↓")),
+      this.searchBox,
       h("div", { class: "top-actions" },
         h("button", { onclick: () => this.shareDialog(), title: "Shareable link" }, "Share"),
         h("button", { class: "icon", onclick: () => this.settingsDialog(), title: "Settings", "aria-label": "Settings" }, "⚙"),
@@ -237,18 +267,30 @@ export class Editor {
           "they're approximate. Re-run the transcribe step with word_timestamps: true for exact cuts.")
       : null;
 
-    const left = h("section", { class: "left" }, this.playerBox, transport, this.timeline.el, this.selBar, this.editsEl, this.clipsEl, this.recsEl);
+    const seeTranscript = h("button", {
+      class: "see-tr m-only", title: "Read the transcript, jump to a word, search it",
+      onclick: () => this.openSheet({ kind: "read" }),
+    }, "See transcript");
+    const left = h("section", { class: "left" },
+      this.playerBox, transport, this.timeline.el, seeTranscript, this.selBar, this.editsEl, this.clipsEl, this.recsEl);
     const lineSel = h("select", {
       "aria-label": "Transcript lines", title: "How the transcript is broken into lines (the export isn't affected)",
       onchange: () => { s.lineMode = lineSel.value; saveSettings(s); this.renderTranscript(); },
     }, ...[["seg", "As transcribed"], ["sentence", "Sentences"],
            ...[5, 8, 10, 12, 15, 20, 30].map((n) => [String(n), `Sentences, ≤ ${n} words`])]
       .map(([v, l]) => h("option", { value: v, selected: s.lineMode === v }, l)));
+    // On a narrow screen this bar heads the transcript sheet: play, where we are, close.
+    this.sheetPlay = h("button", { class: "play m-only", title: "Play / pause", onclick: () => this.togglePlay() }, "▶");
+    this.sheetTime = h("span", { class: "time mono m-only" }, "0:00");
     const trBar = h("div", { class: "tr-bar" },
+      this.sheetPlay, this.sheetTime,
       h("label", { class: "inline" }, "Lines", lineSel),
       h("span", { class: "spacer" }),
-      h("span", { class: "muted" }, h("kbd", {}, "E"), " fixes a misheard word — select it, or click it first"));
-    const right = h("section", { class: "right" }, approx, trBar, this.trEl);
+      h("span", { class: "muted d-only" }, h("kbd", {}, "E"), " fixes a misheard word — select it, or click it first"),
+      h("button", { class: "primary m-only", title: "Close the transcript", onclick: () => this.closeSheet() }, "Done"));
+    this.searchSlot = h("div", { class: "sheet-search m-only" });
+    this.sheetBar = h("div", { class: "sheet-bar m-only" });
+    const right = h("section", { class: "right" }, trBar, this.searchSlot, approx, this.trEl, this.sheetBar);
     const root = h("div", { class: "app editor-view" }, top, h("main", { class: "editor" }, left, right));
 
     this.trEl.addEventListener("mouseup", (e) => this.onTranscriptMouseUp(e));
@@ -339,8 +381,8 @@ export class Editor {
           : `It failed to load (${err?.message || "network or CORS error"}). Check the URL is public and direct.`,
         " ", h("button", { onclick: () => this.pickMediaFile() }, "Choose a local file…")));
     };
-    v.onplay = () => { this.playBtn.textContent = "❚❚"; this.loop(); };
-    v.onpause = () => { this.playBtn.textContent = "▶"; cancelAnimationFrame(this.raf); this.onTime(); };
+    v.onplay = () => { this.playBtn.textContent = this.sheetPlay.textContent = "❚❚"; this.loop(); };
+    v.onpause = () => { this.playBtn.textContent = this.sheetPlay.textContent = "▶"; cancelAnimationFrame(this.raf); this.onTime(); };
     v.onseeked = () => this.onTime();
     v.ontimeupdate = () => { if (v.paused) this.onTime(); };
   }
@@ -385,7 +427,7 @@ export class Editor {
       // No media: still move the "cursor" so the transcript follows.
       this.updateCurrent(wordAt(this.words, t + 1e-4), true);
       this.timeline.setTime(t);
-      this.timeEl.textContent = fmtShort(t);
+      this.timeEl.textContent = this.sheetTime.textContent = fmtShort(t);
       return;
     }
     // Move the word cursor now: keys pressed before the seek lands (Shift+→) use it.
@@ -456,6 +498,7 @@ export class Editor {
       }
     }
     this.timeEl.textContent = `${fmtShort(t)} / ${fmtShort(this.duration)}`;
+    this.sheetTime.textContent = fmtShort(t);
     this.paintCaptions(t);
     this.timeline.setTime(t);
     this.updateCurrent(wordAt(this.words, t + 1e-3), !v.paused);
@@ -481,7 +524,7 @@ export class Editor {
     const el = this.wordEls[i];
     if (!el) return;
     el.classList.add("cur");
-    if (follow && this.settings.follow && !this.userScrolling) {
+    if (follow && this.settings.follow && !this.userScrolling && !this.picking && this.transcriptShown) {
       const r = el.getBoundingClientRect(), box = this.trEl.getBoundingClientRect();
       if (r.top < box.top + 60 || r.bottom > box.bottom - 60) {
         el.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -572,14 +615,22 @@ export class Editor {
     if (!els.length || this.trEl.querySelector(".w-edit")) return;
     if (!this.video.paused) this.video.pause();
     const text = textOf(this.words, a, b);
-    const input = h("input", {
-      class: "w-edit", value: text, spellcheck: true, "aria-label": "Corrected text",
+    // Narrow: a single line as long as its text would run off the screen — a box that wraps instead.
+    const wide = this.narrow;
+    const attrs = {
+      spellcheck: true, "aria-label": "Corrected text",
       title: "Enter: save · Esc: cancel · empty: back to the transcribed text",
-    });
-    const fit = () => { input.style.width = `${Math.max(4, input.value.length + 2)}ch`; };
-    fit();
+    };
+    const input: HTMLInputElement | HTMLTextAreaElement = wide
+      ? h("textarea", { class: "w-edit wide", rows: 1, ...attrs })
+      : h("input", { class: "w-edit", ...attrs });
+    input.value = text;
+    const fit = wide
+      ? () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight + 2}px`; }
+      : () => { input.style.width = `${Math.max(4, input.value.length + 2)}ch`; };
     els.forEach((el) => { el.hidden = true; });
     els[0]!.before(input);
+    fit();
     input.focus();
     input.select();
     let done = false;
@@ -592,7 +643,8 @@ export class Editor {
       if (save) this.setWordText(a, b, input.value);
     };
     input.addEventListener("input", fit);
-    input.addEventListener("keydown", (e) => {
+    input.addEventListener("keydown", (ev) => {
+      const e = ev as KeyboardEvent;
       e.stopPropagation();
       if (e.key === "Enter") { e.preventDefault(); finish(true); }
       if (e.key === "Escape") { e.preventDefault(); finish(false); }
@@ -646,6 +698,7 @@ export class Editor {
     }
     const i = this.wordIndexOf(target);
     if (i < 0) return;
+    if (this.picking) { this.setSel(tapSelect(this.sel, i)); return; }
     if (e.shiftKey && (this.sel || this.cur >= 0)) {
       const anchor = this.sel ? this.selAnchor : this.cur;
       this.setSel({ a: Math.min(anchor, i), b: Math.max(anchor, i) }, anchor);
@@ -724,6 +777,7 @@ export class Editor {
   }
 
   private renderSelBar(): void {
+    this.renderSheetBar();
     const bar = this.selBar;
     bar.replaceChildren();
     this.loopBtn = null;
@@ -871,13 +925,20 @@ export class Editor {
     this.clearSel();
   }
 
-  /** Start a new, empty clip; A / S add to it from now on. */
-  private newReel(): void {
+  /** A new, empty clip, made the current one. */
+  private startReel(): Reel {
     const n = this.reels.reduce((m, r) => Math.max(m, Number(r.name.match(/^Clip (\d+)$/)?.[1] ?? 0)), 0) + 1;
     this.reels.push({ name: `Clip ${Math.max(n, this.reels.length + 1)}`, parts: [] });
     this.active = this.reels.length - 1;
+    return this.reels[this.active]!;
+  }
+
+  /** Start a new clip; A / S add to it from now on. On a narrow screen: pick its text first. */
+  private newReel(): void {
+    if (this.narrow) { this.openSheet({ kind: "new" }); return; }
+    const reel = this.startReel();
     this.clipsChanged();
-    toast(`${this.reels[this.active]!.name} started — select text and press A to add to it`, "info");
+    toast(`${reel.name} started — select text and press A to add to it`, "info");
   }
 
   private selectReel(i: number): void {
@@ -930,12 +991,18 @@ export class Editor {
       h("h3", {}, "Clips"),
       h("span", { class: "muted" }, this.reels.length ? String(this.reels.length) : "none yet"),
       h("span", { class: "spacer" }),
-      h("button", { title: "Start a new clip; A / S add the selection to it (N)", onclick: () => this.newReel() }, "+ New clip")));
+      h("button", {
+        title: this.narrow ? "Start a new clip: pick its text in the transcript" : "Start a new clip; A / S add the selection to it (N)",
+        onclick: () => this.newReel(),
+      }, "+ New clip")));
 
     if (!this.reels.length) {
-      el.append(h("p", { class: "hint" }, "Select text and press ", h("kbd", {}, "A"),
-        " to start a clip. A clip is a list of segments, played and exported back to back. ",
-        "Make as many clips as you like with “+ New clip”."));
+      el.append(this.narrow
+        ? h("p", { class: "hint" }, "“+ New clip” opens the transcript: tap the first word of the clip, then the last. ",
+            "A clip can have several segments, played and exported back to back.")
+        : h("p", { class: "hint" }, "Select text and press ", h("kbd", {}, "A"),
+            " to start a clip. A clip is a list of segments, played and exported back to back. ",
+            "Make as many clips as you like with “+ New clip”."));
       return;
     }
 
@@ -981,7 +1048,9 @@ export class Editor {
         return;
       }
       if (!n) {
-        box.append(h("p", { class: "hint" }, "Select text and press ", h("kbd", {}, "A"), " (or “+ Add to clip”) to add segments."));
+        box.append(this.narrow
+          ? h("button", { title: "Pick this clip's text in the transcript", onclick: () => this.openSheet({ kind: "add" }) }, "Choose its text…")
+          : h("p", { class: "hint" }, "Select text and press ", h("kbd", {}, "A"), " (or “+ Add to clip”) to add segments."));
         el.append(box);
         return;
       }
@@ -990,12 +1059,18 @@ export class Editor {
         ol.append(h("li", {},
           h("button", { class: "icon", title: "Play segment", onclick: () => this.playRange(c) }, "▶"),
           h("div", {
-            class: "clip-body", title: "Select these words",
-            onclick: () => { const r = wordsIn(this.words, c.s + 1e-3, c.e - 1e-3); if (r) { this.setSel(r); this.seek(c.s); this.wordEls[r.a]?.scrollIntoView({ block: "center" }); } },
+            class: "clip-body", title: this.narrow ? "Open these words in the transcript" : "Select these words",
+            onclick: () => this.editSegment(reel, i),
           },
             h("div", { class: "mono" }, `${fmtShort(c.s)} → ${fmtShort(c.e)}`, h("span", { class: "muted" }, ` ${fmtDur(c.e - c.s)}`)),
-            h("div", { class: "clip-text" }, oneLine(c.text ?? "", 90)),
-            h("div", { class: "seg-edges" }, this.edgeButtons(reel, i, "start"), this.edgeButtons(reel, i, "end"))),
+            // narrow: no transcript beside it to show where the segment starts and ends
+            h("div", { class: "clip-text" }, this.narrow ? bothEnds(c.text ?? "", 110) : oneLine(c.text ?? "", 90)),
+            h("div", { class: "seg-edges", onclick: (e: Event) => e.stopPropagation() },
+              this.edgeButtons(reel, i, "start"), this.edgeButtons(reel, i, "end"),
+              h("button", {
+                class: "edit-text m-only", title: "Open the transcript on this segment: change which words it covers, fix their spelling, cut some out",
+                onclick: () => this.editSegment(reel, i),
+              }, "✎ Edit text"))),
           h("div", { class: "clip-actions" },
             h("button", { class: "icon", title: "Move up", disabled: i === 0, onclick: () => this.moveClip(i, -1) }, "↑"),
             h("button", { class: "icon", title: "Move down", disabled: i === n - 1, onclick: () => this.moveClip(i, 1) }, "↓"),
@@ -1006,6 +1081,10 @@ export class Editor {
         onchange: () => { this.settings.copyFormat = fmtSel.value as ClipFormat; saveSettings(this.settings); },
       }, ...CLIP_FORMATS.map((f) => h("option", { value: f.id, selected: f.id === this.settings.copyFormat }, f.label)));
       box.append(ol, h("div", { class: "row wrap" },
+        h("button", {
+          class: "m-only", title: `Add another segment to ${reel.name}: pick its text in the transcript`,
+          onclick: () => this.openSheet({ kind: "add" }),
+        }, "+ Add text"),
         fmtSel,
         h("button", {
           title: "Copy this clip's segments in this format (deleted words inside them are left out)",
@@ -1080,8 +1159,9 @@ export class Editor {
 
   private showRec(rec: PlacedRec): void {
     const first = rec.parts[0]!;
-    this.setSel({ a: first.a, b: first.b });
     this.seek(this.words[first.a]!.s);
+    if (this.narrow) { this.openSheet({ kind: "read" }, { a: first.a, b: first.b }); return; }
+    this.setSel({ a: first.a, b: first.b });
     this.wordEls[first.a]?.scrollIntoView({ block: "center" });
   }
 
@@ -1090,7 +1170,7 @@ export class Editor {
     el.replaceChildren();
     el.append(h("header", {},
       h("h3", {}, "Recommended"),
-      h("span", { class: "muted" }, this.recs.length ? `${this.recs.length} for reels & shorts` : "none yet"),
+      h("span", { class: "muted" }, !this.recs.length ? "none yet" : this.narrow ? String(this.recs.length) : `${this.recs.length} for reels & shorts`),
       h("span", { class: "spacer" }),
       h("button", { title: "Get a prompt for the AI you use, and paste its answer back", onclick: () => this.openAskAi() }, "Ask an AI…"),
       this.recs.length
@@ -1408,9 +1488,135 @@ export class Editor {
     }
     reel.parts[i] = { ...rangeOf(this.words, r.a, r.b, this.settings.pad, this.duration), text: textOf(this.words, r.a, r.b) };
     this.clipsChanged();
-    // Show the new extent in the transcript, at the end that moved.
+    // Show the new extent in the transcript, at the end that moved. (Narrow: the
+    // segment's own text shows both ends, and a selection would only shift the list.)
+    if (!this.transcriptShown) return;
     this.setSel(r);
     this.wordEls[edge === "start" ? r.a : r.b]?.scrollIntoView({ block: "center" });
+  }
+
+  /** A segment's words in the transcript — selected, to look at or to change. */
+  private editSegment(reel: Reel, i: number): void {
+    const c = reel.parts[i]!;
+    const r = wordsIn(this.words, c.s + 1e-3, c.e - 1e-3);
+    if (!r) return;
+    this.seek(c.s);
+    if (this.narrow) { this.openSheet({ kind: "segment", reel, i }, r); return; }
+    this.setSel(r);
+    this.wordEls[r.a]?.scrollIntoView({ block: "center" });
+  }
+
+  // ======================================================== narrow screens: the transcript sheet
+
+  private get narrow(): boolean {
+    return this.mq.matches;
+  }
+
+  /** Is the transcript on screen? (On a narrow screen only while its sheet is open.) */
+  private get transcriptShown(): boolean {
+    return !this.narrow || !!this.sheet;
+  }
+
+  /** Put what moves between the two layouts where it belongs, and redraw what differs. */
+  private syncLayout(): void {
+    if (this.narrow) this.searchSlot.append(this.searchBox);
+    else {
+      this.closeSheet();
+      this.topbar.insertBefore(this.searchBox, this.topbar.lastElementChild);
+    }
+    this.renderClips();
+    this.renderRecs();
+    this.renderSelBar();
+    this.timeline.resize();
+  }
+
+  /** Open the transcript over the page (narrow screens), on `show` or on the current word. */
+  private openSheet(sheet: Sheet, show: WordRange | null = null): void {
+    if (!this.narrow) return;
+    this.sheet = sheet;
+    this.picking = sheet.kind !== "read" || !!show;
+    this.root.classList.add("tr-open");
+    document.body.classList.add("sheet-open");
+    if (show) this.setSel(show); else this.renderSheetBar();
+    const at = this.wordEls[show?.a ?? this.sel?.a ?? Math.max(0, this.cur)];
+    requestAnimationFrame(() => at?.scrollIntoView({ block: "center" }));
+  }
+
+  private closeSheet(): void {
+    const sheet = this.sheet;
+    if (!sheet) return;
+    this.trEl.querySelector<HTMLElement>(".w-edit")?.blur(); // saves a spelling fix in progress
+    this.sheet = null;
+    this.picking = false;
+    this.root.classList.remove("tr-open");
+    document.body.classList.remove("sheet-open");
+    // Words picked for a clip and not used are dropped; a selection made while
+    // reading stays, with everything the page can do with one.
+    if (sheet.kind !== "read") this.clearSel();
+    this.renderSheetBar();
+  }
+
+  /** The bar under the transcript sheet: what to tap, or what to do with the picked words. */
+  private renderSheetBar(): void {
+    const bar = this.sheetBar;
+    bar.replaceChildren();
+    const sheet = this.sheet;
+    if (!sheet) return;
+    const reel = this.reels[this.active];
+    if (!this.sel) {
+      bar.append(h("div", { class: "sheet-actions" },
+        h("p", { class: "hint" },
+          sheet.kind === "new" ? "New clip — tap its first word, then its last."
+            : sheet.kind === "add" ? `Adding to ${reel?.name ?? "a new clip"} — tap the first word, then the last.`
+            : sheet.kind === "segment" ? "Tap the segment's first word, then its last."
+            : this.picking ? "Tap the first word, then the last." : "Tap a word to jump there."),
+        this.undoStack.length ? h("button", { class: "icon", title: "Undo the last cut or fix", onclick: () => this.undo() }, "↶") : null,
+        sheet.kind === "read" && !this.picking
+          ? h("button", { title: "Pick words: for a clip, to fix their spelling, or to cut them out",
+              onclick: () => { this.picking = true; this.renderSheetBar(); } }, "Select text")
+          : null));
+      return;
+    }
+    const r = this.selRange(), n = this.sel.b - this.sel.a + 1, allDel = this.selAllDeleted();
+    const [label, title] = sheet.kind === "segment" ? ["✓ Update", "Make the segment these words"]
+      : sheet.kind === "new" ? ["+ Make clip", "Start a new clip with these words"]
+      : ["+ Add to clip", `Add these words to ${reel?.name ?? "a new clip"}`];
+    bar.append(
+      h("div", { class: "sheet-sel" },
+        h("span", { class: "mono" }, `${fmtShort(r.s)} → ${fmtShort(r.e)}`),
+        h("span", { class: "muted" }, `${fmtDur(r.e - r.s)} · ${n} word${n > 1 ? "s" : ""}`),
+        h("span", { class: "spacer" }),
+        this.picking ? h("span", { class: "muted" }, "tap a word to move the nearer end") : null),
+      h("div", { class: "sheet-actions" },
+        h("button", { class: "icon", title: "Play these words", onclick: () => this.playRange(this.selRange()) }, "▶"),
+        h("button", { class: "primary grow", title, onclick: () => this.commitPick() }, label),
+        h("button", { title: "Correct the spelling of these words", onclick: () => this.editSelWords() }, "✎ Fix"),
+        h("button", {
+          class: allDel ? "" : "danger", title: allDel ? "Put these words back" : "Cut these words out: exports leave them out",
+          onclick: () => this.deleteSel(),
+        }, allDel ? "↺ Restore" : "✂ Cut"),
+        h("button", { class: "icon", title: "Clear the selection", onclick: () => this.clearSel() }, "✕")));
+  }
+
+  /** Use the picked words for what the sheet was opened for. */
+  private commitPick(): void {
+    const sheet = this.sheet;
+    if (!sheet || !this.sel) return;
+    if (sheet.kind === "segment") {
+      const { a, b } = this.sel;
+      if (sheet.reel.parts[sheet.i]) {
+        sheet.reel.parts[sheet.i] = { ...rangeOf(this.words, a, b, this.settings.pad, this.duration), text: textOf(this.words, a, b) };
+        this.clipsChanged();
+        toast("Segment updated");
+      }
+    } else {
+      // A new clip — unless the current one is still empty, which would only be left behind.
+      if (sheet.kind === "new" && this.reels[this.active]?.parts.length) this.startReel();
+      this.addSelAsClip(false);
+      if (sheet.kind === "read") return; // still reading
+    }
+    this.closeSheet();
+    this.clipsEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   private moveClip(i: number, d: -1 | 1): void {
@@ -1914,7 +2120,9 @@ export class Editor {
       switch (e.key) {
         case " ": e.preventDefault(); this.togglePlay(); break;
         case "Enter": if (this.sel) { e.preventDefault(); this.playRange(this.selRange()); } break;
-        case "Escape": this.setMode({ kind: "free" }); this.clearSel(); break;
+        case "Escape":
+          if (this.sheet && !this.sel) { this.closeSheet(); break; }
+          this.setMode({ kind: "free" }); this.clearSel(); break;
         case "ArrowLeft": case "ArrowRight": {
           e.preventDefault();
           const d = e.key === "ArrowLeft" ? -1 : 1;
@@ -1948,6 +2156,8 @@ export class Editor {
   destroy(): void {
     if (this.keyHandler) document.removeEventListener("keydown", this.keyHandler);
     document.removeEventListener("close", this.onDialogClose, true);
+    this.mq.removeEventListener("change", this.onLayout);
+    document.body.classList.remove("sheet-open");
     cancelAnimationFrame(this.raf);
     this.video.pause();
     this.video.removeAttribute("src");
@@ -1958,6 +2168,7 @@ export class Editor {
 
   /** Called after the root is in the document (sizes are known). */
   mounted(): void {
-    this.timeline.resize();
+    this.mq.addEventListener("change", this.onLayout);
+    this.syncLayout();
   }
 }

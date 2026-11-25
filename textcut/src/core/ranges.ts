@@ -93,6 +93,21 @@ export function moveEdge(words: readonly Word[], r: WordRange, edge: "start" | "
   return { a, b };
 }
 
+/**
+ * Picking a stretch of words by tapping, for touch screens where dragging a
+ * selection across text isn't practical: the first tap picks one word, and every
+ * later tap moves the end of the selection that is nearer to the tapped word — so
+ * "first word, then last word" selects a passage, and one more tap adjusts either
+ * end, outwards or inwards.
+ */
+export function tapSelect(sel: WordRange | null, i: number): WordRange {
+  if (!sel) return { a: i, b: i };
+  const { a, b } = sel;
+  if (i <= a) return { a: i, b };
+  if (i >= b) return { a, b: i };
+  return i - a < b - i ? { a: i, b } : { a, b: i };
+}
+
 /** Merge overlapping or touching ranges; output sorted by start. */
 export function mergeRanges(ranges: readonly TimeRange[], eps = 0.001): TimeRange[] {
   const sorted = ranges.map((x) => ({ s: x.s, e: x.e })).sort((x, y) => x.s - y.s);

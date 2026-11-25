@@ -403,29 +403,12 @@ details summary { cursor: pointer; color: var(--muted); }
 #toast {
   position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0;
   background: var(--cur-bg); color: var(--cur-text); padding: 8px 14px; border-radius: 8px;
-  max-width: min(560px, calc(100vw - 32px)); transition: .18s; pointer-events: none; z-index: 10;
+  max-width: min(560px, calc(100vw - 32px)); transition: .18s; pointer-events: none; z-index: 40;
   box-shadow: var(--shadow); font-size: 13px;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 #toast.err { background: var(--error); color: #fff; }
 
-/* ============================================================== narrow screens */
-
-@media (max-width: 860px) {
-  .cards { grid-template-columns: 1fr; }
-  .editor-view { height: auto; }
-  .editor { display: flex; flex-direction: column; }
-  .left { border-right: 0; border-bottom: 1px solid var(--border); overflow: visible; }
-  .player { position: relative; }
-  .transcript { padding: 4px 16px 30vh; font-size: 16.5px; overflow: visible; }
-  .seg { grid-template-columns: 1fr; gap: 0; }
-  .seg .ts { text-align: left; padding: 0; }
-  .topbar { flex-wrap: wrap; gap: 8px; }
-  .search { order: 5; width: 100%; margin: 0; }
-  .search input { flex: 1; width: auto; }
-  .doc-title strong { max-width: 60vw; }
-  .top-actions { margin-left: auto; }
-}
 .cap-preview-box { display: flex; flex-direction: column; gap: 8px; }
 .cap-preview-box .inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .cap-preview-box .num { width: 5em; }
@@ -440,3 +423,94 @@ details summary { cursor: pointer; color: var(--muted); }
   border-radius: 4px; padding: 0 4px; margin: 0 2px; min-width: 4ch;
 }
 .w.fixed.del { text-decoration: line-through 2px var(--cut); }
+textarea.w-edit.wide { display: block; width: 100%; margin: 4px 0; padding: 6px 8px; resize: none; line-height: 1.5; overflow: hidden; }
+
+/* ============================================================== narrow screens */
+
+/* shown on one layout only: .m-only on narrow screens, .d-only on wide ones */
+@media (min-width: 861px) { .m-only { display: none !important; } }
+
+@media (max-width: 860px) {
+  .d-only { display: none !important; }
+  .cards { grid-template-columns: 1fr; }
+  .editor-view { height: auto; min-height: 100dvh; }
+  .editor { display: flex; flex-direction: column; }
+  .left { border-right: 0; overflow: visible; }
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  .doc-title { flex: 1; }
+  .doc-title strong { max-width: none; }
+  .top-actions { margin-left: auto; }
+
+  /* fingers, not a pointer — and no zoom-on-focus on iOS (it zooms below 16px) */
+  button { padding: 8px 12px; }
+  button.icon { padding: 7px 10px; min-width: 38px; }
+  button.linkish { padding: 0; }
+  input[type="text"], input[type="url"], input[type="search"], input[type="number"], select, textarea { font-size: 16px; }
+  .transport .play { width: 46px; }
+  .timeline { height: 54px; }
+
+  /* the page: player, transcript button, clips, recommendations — the edit panel last */
+  .see-tr { font-weight: 600; padding: 11px 12px; }
+  .selbar:not(.active) { display: none; }
+  .edits { order: 9; }
+  .reel-head button, .clip-actions button { padding: 6px 9px; min-width: 34px; font-size: 13px; }
+  .reel-head button.cc-move { padding: 6px 8px; font-size: 11px; }
+  input.reel-name { flex: 1; min-width: 6em; width: auto; }
+  .clips li { flex-wrap: wrap; }
+  .clips li .clip-body { flex-basis: 60%; }
+  .clips li .clip-text { white-space: normal; }
+  .clips li .clip-actions { margin-left: auto; }
+  .seg-edges { gap: 8px 14px; margin-top: 8px; }
+  .seg-edges button { padding: 3px 0; min-width: 34px; font-size: 16px; }
+  .seg-edges button.edit-text { padding: 5px 12px; font-size: 13px; }
+  .recs li { flex-wrap: wrap; }
+  .recs li .clip-body { flex-basis: 70%; }
+  .recs li .clip-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .recs .clip-actions { margin-left: auto; }
+
+  /* the transcript: a sheet over the page, opened on demand */
+  .right { display: none; }
+  .tr-open .right {
+    display: flex; position: fixed; inset: 0; z-index: 20; padding: 0; background: var(--bg);
+  }
+  body.sheet-open { overflow: hidden; }
+  .right .notice { margin: 8px 12px 0; }
+  .tr-bar { padding: 8px 12px; gap: 8px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: nowrap; }
+  .tr-bar .play { width: 46px; flex: none; }
+  .tr-bar .time { font-variant-numeric: tabular-nums; }
+  .tr-bar .inline { min-width: 0; font-weight: 400; }
+  .tr-bar .inline select { min-width: 0; max-width: 34vw; }
+  .sheet-search { padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .sheet-search .search { margin: 0; }
+  .sheet-search .search input { flex: 1; width: auto; }
+  .transcript {
+    padding: 12px 16px 30vh; font-size: 17px; overscroll-behavior: contain;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .seg { grid-template-columns: 1fr; gap: 0; }
+  .seg .ts { text-align: left; padding: 0; }
+  .w { padding: 3px 0; }
+  .sheet-bar {
+    border-top: 1px solid var(--border); background: var(--panel); box-shadow: 0 -4px 16px rgba(0, 0, 0, .08);
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px;
+  }
+  .sheet-sel { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+  .sheet-sel .mono { font-weight: 600; font-size: 13.5px; }
+  .sheet-actions { display: flex; align-items: center; gap: 6px; }
+  .sheet-actions .hint { flex: 1; }
+  .sheet-actions .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #toast { bottom: 96px; }
+
+  dialog.modal { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  dialog.modal > footer { flex-wrap: wrap; }
+}
+/* A phone on its side: a player that stays in view would leave room for nothing else. */
+@media (max-width: 860px) and (orientation: landscape) {
+  .player { position: relative; }
+}
+/* A long press on a touch screen would start the browser's own text selection,
+   which nothing here reads: words are picked by tapping. A mouse still drags. */
+@media (max-width: 860px) and (pointer: coarse) {
+  .transcript { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .w-edit { -webkit-user-select: text; user-select: text; }
+}

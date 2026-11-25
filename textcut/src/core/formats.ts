@@ -105,3 +105,20 @@ export function oneLine(s: string, n: number): string {
   s = s.replace(/\s+/g, " ").trim();
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
+
+/**
+ * A long text as its beginning and its end, at most about `n` characters:
+ * "It starts like this … and this is how it ends". For a segment whose two ends
+ * are being adjusted, both of them matter and the middle doesn't.
+ */
+export function bothEnds(s: string, n: number): string {
+  s = s.replace(/\s+/g, " ").trim();
+  if (s.length <= n) return s;
+  const half = Math.max(1, Math.floor((n - 3) / 2));
+  // cut between words where there is a space in reach, else mid-word
+  const h1 = s.slice(0, half + 1), t1 = s.slice(-(half + 1));
+  const hs = h1.lastIndexOf(" "), ts = t1.indexOf(" ");
+  const head = hs > 0 ? h1.slice(0, hs) : s.slice(0, half);
+  const tail = ts >= 0 && ts < t1.length - 1 ? t1.slice(ts + 1) : s.slice(-half);
+  return `${head} … ${tail}`;
+}
