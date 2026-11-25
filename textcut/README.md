@@ -62,7 +62,8 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   `textcut_fonts/` and stops with a message if it isn't. One font of your own at a time.
 - **Recommended clips**: proposals for reels and shorts, listed under *Clips* when the
   recording has a `<stem>.clips.json`, or after *Ask an AI…* — a prompt for the AI you
-  already use, whose answer you paste back (see [Recommended clips](#recommended-clips)). Each
+  already use, which answers with a link to click or with JSON you paste back (see
+  [Recommended clips](#recommended-clips)). Each
   one has a title, a 0–100 score and the reason it should work. ▶ plays it, a click
   shows its words in the transcript, and **+ Clip** turns it into a normal clip that you
   trim, extend and export like any other. They also show as a thin band on the timeline.
@@ -150,6 +151,7 @@ host's server. `?…` works too.
 | `x`     | an export to open on arrival: ranges, format, processing, file name (compressed JSON) |
 | `recs`  | URL of a `.clips.json` with recommended clips. Without it, the file next to `words` is tried (`x.words.json` → `x.clips.json`) |
 | `rx`    | the recommended clips themselves, compressed like `tx` |
+| `ai`    | recommended clips an AI wrote onto the link, by line number: `412;12-19~92~A_title~Why_it_works;40-44~81~Another` (see [Recommended clips](#recommended-clips)) |
 
 ```
 https://<host>/textcut/#media=https://x.org/talk.mp4&words=https://x.org/talk.words.json&sel=1:23.5-1:31
@@ -221,6 +223,27 @@ paste the answer back and the list appears. Nothing is sent from the app, and no
 is needed. The AI answers with line numbers rather than times, so its clips always
 start and end on a phrase boundary. You can set how many clips, how long, and add
 notes for the AI (who the audience is, what to avoid).
+
+**The AI can answer with a link.** When the recording was opened from a link with
+`words=`, the dialog offers *The AI answers with: a link to click*. The prompt then
+gives the AI this recording's link and has it write the clips onto the end of it
+(`ai=`). Clicking the link in the chat opens the recording with the clips in place,
+and the link can be sent on as it is. If the chat doesn't make it clickable, paste the
+answer into the dialog: a link is read the same as JSON. *JSON to paste back* stays
+available; it also carries tags and is the safer choice for a long list, since the AI
+has less to get wrong.
+
+The `ai=` value is `<lines>;` followed by the clips, `;` between them. `<lines>` is how
+many lines the transcript had in the prompt; a link whose count doesn't match the
+recording is refused rather than shown with the wrong passages. Each clip is
+`lines~score~title~why`: `12-19` or, in two parts, `12-19,40-44`; `_` stands for a
+space. Lines are numbered from the words as transcribed, so the numbers mean the same
+passages for everybody, whatever they have corrected. Clips that arrive this way
+replace the list kept in the browser, like a pasted answer.
+
+The transcript must be at a URL for this: a link that embeds the transcript (`tx=`) or
+a local file can't be handed to an AI to copy. With the media on your computer the
+link still works, but opens the transcript without it.
 
 A list you brought yourself (an AI's answer, a dropped file) is kept in the browser
 for that recording and shown instead of the link's until you clear it with ✕. Sharing

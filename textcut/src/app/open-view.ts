@@ -213,6 +213,7 @@ export function openView(onOpen: (r: OpenResult) => void, error?: string, prefil
             ["sel", "selection to restore — 83.5-91.2"],
             ["clips", "clip list — 10-20.5,30-41"],
             ["recs", "URL of a .clips.json with recommended clips (default: the one next to the .words.json)"],
+            ["ai", "recommended clips an AI wrote onto the link — “Ask an AI…” gives the prompt for it"],
           ] as const).map(([k, d]) => h("tr", {}, h("td", {}, h("code", {}, k)), h("td", {}, d)))),
         h("p", { class: "muted mono" }, "https://<this page>/#media=https://x.org/talk.mp4&words=https://x.org/talk.words.json&at=1:23"))),
   );

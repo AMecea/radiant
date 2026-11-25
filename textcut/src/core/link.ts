@@ -22,6 +22,8 @@ import type { TimeRange } from "./ranges";
  *   recs   URL of a <stem>.clips.json with recommended clips (see core/recs.ts);
  *          without it, the file next to `words` is tried
  *   rx     the recommended clips themselves, packed like `tx`
+ *   ai     recommended clips as an AI wrote them onto the link, by line number:
+ *          "412;12-19~92~A_title~Why;40-44~81~Another" (see core/recprompt.ts)
  */
 export interface LinkParams {
   words?: string;
@@ -41,6 +43,8 @@ export interface LinkParams {
   x?: string;
   recs?: string;
   rx?: string;
+  /** recommended clips an AI added to the link (see readRecLink in ./recprompt) */
+  ai?: string;
 }
 
 /** A ready-to-run export, shared in a link (`x=`, deflate + base64url JSON). */
@@ -88,6 +92,8 @@ export function readLink(loc: { search: string; hash: string }): LinkParams {
   const recs = get("recs"), rx = get("rx");
   if (recs) out.recs = recs;
   if (rx) out.rx = rx;
+  const ai = get("ai");
+  if (ai) out.ai = ai;
   const clips = get("clips");
   if (clips) out.clips = decodeRanges(clips);
   const reels = get("reels");
@@ -120,7 +126,8 @@ export function buildLink(base: string, p: LinkParams): string {
   if (p.recs) h.set("recs", p.recs);
   if (p.rx) h.set("rx", p.rx);
   if (p.tx) h.set("tx", p.tx); // last: it's the long one
-  const frag = h.toString().replace(/%2F/gi, "/").replace(/%3A/gi, ":").replace(/%2C/gi, ",");
+  if (p.ai) h.set("ai", p.ai); // after everything: an AI writes its clips onto the end
+  const frag = h.toString().replace(/%2F/gi, "/").replace(/%3A/gi, ":").replace(/%2C/gi, ",").replace(/%3B/gi, ";").replace(/%7E/gi, "~");
   return `${base.replace(/#.*$/, "")}#${frag}`;
 }
 
