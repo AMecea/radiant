@@ -172,6 +172,15 @@ kbd {
   display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none;
 }
 .cap-grip:active { cursor: grabbing; }
+/* the frame's corners: pull one to crop closer or wider */
+.cap-corner {
+  position: absolute; width: min(26px, 46%); height: min(26px, 46%); pointer-events: auto; touch-action: none;
+  border: 0 solid #fff; filter: drop-shadow(0 0 1.5px #000);
+}
+.cap-corner.nw { left: -2px; top: -2px; border-width: 4px 0 0 4px; cursor: nwse-resize; }
+.cap-corner.ne { right: -2px; top: -2px; border-width: 4px 4px 0 0; cursor: nesw-resize; }
+.cap-corner.sw { left: -2px; bottom: -2px; border-width: 0 0 4px 4px; cursor: nesw-resize; }
+.cap-corner.se { right: -2px; bottom: -2px; border-width: 0 4px 4px 0; cursor: nwse-resize; }
 button.cc { font-weight: 700; font-size: 11.5px; letter-spacing: .04em; }
 .reel-head { flex-wrap: wrap; }
 .reel-head button.cc-move { padding: 3px 5px; font-size: 10px; min-width: 0; }
@@ -191,6 +200,9 @@ button.cc { font-weight: 700; font-size: 11.5px; letter-spacing: .04em; }
 .transport .play { width: 40px; font-size: 13px; }
 .transport .time { font-variant-numeric: tabular-nums; }
 .transport .chk { font-size: 12.5px; color: var(--muted); }
+.transport .zoom[hidden] { display: none; }
+.transport .zoom input { width: 96px; }
+.transport .zoom .mono { min-width: 2.6em; }
 
 .timeline {
   position: relative; height: 46px; border-radius: 8px; overflow: hidden; cursor: crosshair;

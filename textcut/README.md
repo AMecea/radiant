@@ -22,9 +22,10 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   and go into shared links. They also apply to clips and selections you export.
 - **Fix misheard words**: select words (or click one) and press `E`, or use *✎ Fix
   text*. Type the correction, then press `Enter` (or `Esc` to cancel). An empty field
-  goes back to the transcribed text. Each word keeps its timing. Typing more or fewer
-  words than you selected spreads them over the old timings, so typing "Kenobi" over
-  "Ken obi" merges the two. Fixes are underlined, and hovering shows the original. They
+  goes back to the transcribed text. Select as much as you like, a whole passage if it
+  needs several fixes. Each word keeps its timing: the words you leave alone stay where
+  they are, and what you change is spread over the words it replaces, so typing "Kenobi"
+  over "Ken obi" merges the two. Fixes are underlined, and hovering shows the original. They
   show up in search, copied text, SRT and burned-in captions. They're saved with your
   edits, can be undone, and travel in shared links (`fx`).
 - **Lines**: the control above the transcript sets how the text is broken into lines.
@@ -43,9 +44,13 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   pause). The segment stays on word boundaries and the transcript shows its new extent.
 - **Frame** (under the player) shows the frame the export keeps, i.e. its *Crop*, on
   the video, with the rest dimmed. Drag the bar at its top to move it left/right (and
-  up/down when the crop is smaller than the picture). It is the same setting as
-  *Export → Processing → Crop*, where the aspect and size are chosen; one position for
-  all clips.
+  up/down when the crop is smaller than the picture), and drag a corner to crop closer
+  or wider; the frame keeps its shape. **Zoom**, next to the switch, does the same from
+  the centre, up to 5×, so the export shows less of the picture, closer: what is
+  inside the frame is scaled back up to the size the frame has at 1× (a zoom adds no
+  detail, so a strong one looks soft). It is the same setting as
+  *Export → Processing → Crop*, where the aspect is chosen and the zoom is its *Size*;
+  one frame for all clips.
 - **CC** on a clip puts the transcript on screen for that clip, with your spelling fixes
   and without the words you deleted. The player shows the captions while the clip plays
   (inside the crop frame, when a crop is set), and the clip's **Export…** opens with
@@ -68,7 +73,7 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   shows its words in the transcript, and **+ Clip** turns it into a normal clip that you
   trim, extend and export like any other. They also show as a thin band on the timeline.
 - **Export** the edit, the clips or a selection, with optional **processing**: *crop* to
-  9:16 / 1:1 / 4:5… (drag the frame on a preview), *resize*, *captions*, *reduce noise*,
+  9:16 / 1:1 / 4:5… (drag the frame on a preview; a smaller size zooms in), *resize*, *captions*, *reduce noise*,
   *normalise loudness*. *Smooth joins* adds 10 ms audio fades at every cut, so word-level cuts
   don't click. The dialog always shows the **ffmpeg command** for the current choices
   (copy it, or download it as a `.sh`) and the **radiant plan**: one `ffmpeg` step with

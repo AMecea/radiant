@@ -9,13 +9,13 @@ import { fmtDur, fmtShort, fmtTime } from "../core/time";
 import { APP_NAME } from "../core/app";
 import { bothEnds, CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
 import {
-  encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
+  encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadEdit, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
 import { parseRecs, placeRecs, recsFile, type PlacedRec, type Rec, type RecsFile } from "../core/recs";
 import { buildRecPrompt, promptLines, readRecAnswer, readRecLink, recLinkStub, type PromptLine } from "../core/recprompt";
 import { captionLayout, FONTS, type CaptionLayout } from "../core/captions";
-import { cropRect, normalizeOps } from "../core/ops";
+import { cropRect, cropZoom, dragCropCorner, MAX_ZOOM, normalizeOps, zoomSize, type Corner } from "../core/ops";
 import { copyText, download, h, isTyping, modal, toast } from "./dom";
 import { loadJson, loadSettings, saveJson, saveSettings, type Settings } from "./settings";
 import {
@@ -144,6 +144,9 @@ export class Editor {
   private frameShown = "";
   private frameChk!: HTMLInputElement;
   private frameLbl!: HTMLElement;
+  private zoomBox!: HTMLElement;
+  private zoomIn!: HTMLInputElement;
+  private zoomLbl!: HTMLElement;
   private onDialogClose = (): void => this.paintCaptions();
   /** until when (performance.now) a sample caption shows where the captions sit */
   private capHint = 0;
@@ -223,14 +226,29 @@ export class Editor {
 
     this.video = h("video", { playsInline: true, preload: "auto" });
     this.video.playbackRate = s.rate;
-    const grip = h("div", { class: "cap-grip", title: "Drag to move the frame the export keeps" }, "⇔ drag");
-    this.cropEl = h("div", { class: "cap-frame", hidden: true }, grip);
+    const grip = h("div", { class: "cap-grip", title: "Drag to move the frame the export keeps" }, "⇔ move");
+    const corners = (["nw", "ne", "sw", "se"] as const).map((c) => {
+      const el = h("div", { class: `cap-corner ${c}`, title: "Drag a corner to crop closer or wider" });
+      this.bindFrameResize(el, c);
+      return el;
+    });
+    this.cropEl = h("div", { class: "cap-frame", hidden: true }, grip, ...corners);
     this.bindFrameDrag(grip);
     this.frameChk = h("input", { type: "checkbox", onchange: () => this.setFrame(this.frameChk.checked) });
     this.frameLbl = h("span", {}, "Frame");
     const frameToggle = h("label", {
-      class: "chk", title: "Show the frame the export keeps (its Crop) on the video, and drag it into place",
+      class: "chk", title: "Show the frame the export keeps (its Crop) on the video: drag its bar to move it, a corner to resize it",
     }, this.frameChk, this.frameLbl);
+    this.zoomIn = h("input", {
+      type: "range", min: 1, max: MAX_ZOOM, step: 0.1, value: "1", "aria-label": "Zoom",
+      oninput: () => this.setZoom(Number(this.zoomIn.value)),
+      onchange: () => saveSettings(this.settings),
+    });
+    this.zoomLbl = h("span", { class: "mono" }, "1×");
+    this.zoomBox = h("label", {
+      class: "chk zoom", hidden: true,
+      title: "Zoom in: the frame gets smaller, so less of the picture fills the export (the same as Size in Export → Crop)",
+    }, "Zoom", this.zoomIn, this.zoomLbl);
     this.capEl = h("div", { class: "cap-overlay", hidden: true });
     this.playerBox = h("div", { class: "player" }, this.video, this.cropEl, this.capEl);
     new ResizeObserver(() => { this.capShown = ""; this.paintCaptions(); }).observe(this.playerBox);
@@ -244,7 +262,7 @@ export class Editor {
       this.toggle("Follow", "Keep the current word in view", "follow"),
       this.toggle("Skip pauses", "Jump over pauses while playing (preview of a tightened cut)", "skipPauses"),
       this.toggle("Skip cuts", "Jump over deleted words and pauses while playing (preview the edit)", "previewEdits"),
-      frameToggle);
+      frameToggle, this.zoomBox);
     // The export dialog changes the crop and the captions: catch up when it closes.
     document.addEventListener("close", this.onDialogClose, true);
 
@@ -605,7 +623,6 @@ export class Editor {
   private editSelWords(): void {
     const r = this.sel ?? (this.cur >= 0 ? { a: this.cur, b: this.cur } : null);
     if (!r) { toast("Select a word (or click one) to fix it", "info"); return; }
-    if (r.b - r.a >= 40) { toast("Select at most 40 words to fix at a time", "info"); return; }
     this.editWords(r.a, r.b);
   }
 
@@ -615,8 +632,9 @@ export class Editor {
     if (!els.length || this.trEl.querySelector(".w-edit")) return;
     if (!this.video.paused) this.video.pause();
     const text = textOf(this.words, a, b);
-    // Narrow: a single line as long as its text would run off the screen — a box that wraps instead.
-    const wide = this.narrow;
+    // A single line as long as its text would run off the screen (always so on a narrow
+    // one, and for a long passage anywhere) — a box that wraps instead.
+    const wide = this.narrow || text.length > 60;
     const attrs = {
       spellcheck: true, "aria-label": "Corrected text",
       title: "Enter: save · Esc: cancel · empty: back to the transcribed text",
@@ -653,13 +671,14 @@ export class Editor {
   }
 
   /**
-   * New text for words a..b. The timings stay; the text is spread over the words
-   * (see spreadText). Empty → back to what was transcribed.
+   * New text for words a..b. The timings stay; the words left as they were keep
+   * their place and what changed is spread over the words it replaces (see
+   * spreadEdit). Empty → back to what was transcribed.
    */
   private setWordText(a: number, b: number, value: string): void {
     const v = value.replace(/\s+/g, " ").trim();
     if (v === textOf(this.words, a, b)) return;
-    const texts = v ? spreadText(v, b - a + 1) : this.origW.slice(a, b + 1);
+    const texts = v ? spreadEdit(this.words.slice(a, b + 1).map((w) => w.w), v) : this.origW.slice(a, b + 1);
     this.snapshot();
     texts.forEach((t, k) => {
       const i = a + k;
@@ -1383,7 +1402,15 @@ export class Editor {
     this.settings.ops = ops;
     saveSettings(this.settings);
     this.paintCaptions();
-    if (on) toast("The export keeps what's inside the frame — drag its top bar to move it. Aspect and size are in Export → Crop", "info", 5000);
+    if (on) toast("The export keeps what's inside the frame — drag its top bar to move it, a corner (or Zoom) to crop closer. The shape is in Export → Crop", "info", 5000);
+  }
+
+  /** Zoom the frame in or out: the crop's size, changed where the picture is. */
+  private setZoom(zoom: number): void {
+    const ops = normalizeOps(this.settings.ops);
+    ops.find((o) => o.id === "crop")!.p.size = zoomSize(zoom);
+    this.settings.ops = ops;
+    this.paintCaptions();
   }
 
   /** Dragging the frame's bar moves the crop, like dragging the box in the export dialog. */
@@ -1414,12 +1441,46 @@ export class Editor {
     grip.addEventListener("pointercancel", end);
   }
 
+  /** Dragging a corner of the frame crops closer or wider; the opposite corner stays put. */
+  private bindFrameResize(el: HTMLElement, corner: Corner): void {
+    let drag: { x: number; y: number; px: number; py: number; p: Record<string, string | number> } | null = null;
+    el.addEventListener("pointerdown", (e) => {
+      const v = this.video;
+      const crop = normalizeOps(this.settings.ops).find((o) => o.id === "crop")!;
+      const r = cropRect(crop.p, { width: v.videoWidth, height: v.videoHeight });
+      drag = {
+        x: e.clientX, y: e.clientY, p: { ...crop.p },
+        px: corner[1] === "w" ? r.x : r.x + r.w, py: corner[0] === "n" ? r.y : r.y + r.h,
+      };
+      try { el.setPointerCapture(e.pointerId); } catch { /* the drag still works while the pointer stays on the corner */ }
+      e.preventDefault();
+    });
+    el.addEventListener("pointermove", (e) => {
+      const g = this.pictureGeom();
+      if (!drag || !g) return;
+      const v = this.video;
+      const ops = normalizeOps(this.settings.ops);
+      Object.assign(ops.find((o) => o.id === "crop")!.p, dragCropCorner(drag.p, { width: v.videoWidth, height: v.videoHeight }, corner,
+        drag.px + (e.clientX - drag.x) / g.k, drag.py + (e.clientY - drag.y) / g.k));
+      this.settings.ops = ops;
+      this.paintCaptions();
+    });
+    const end = () => { if (drag) saveSettings(this.settings); drag = null; };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+
   /** Draw the export's crop frame over the video (whenever a crop is set). */
   private paintFrame(): void {
     const crop = normalizeOps(this.settings.ops).find((o) => o.id === "crop")!;
     if (this.frameChk.checked !== crop.on) this.frameChk.checked = crop.on;
     const label = `Frame ${String(crop.p.aspect ?? "")}`.trim();
     if (this.frameLbl.textContent !== label) this.frameLbl.textContent = label;
+    // the zoom follows the crop too: it can be changed in the export dialog
+    const zoom = cropZoom(crop.p.size).toFixed(1);
+    this.zoomBox.hidden = !crop.on;
+    if (Number(this.zoomIn.value).toFixed(1) !== zoom) this.zoomIn.value = zoom;
+    if (this.zoomLbl.textContent !== `${+zoom}×`) this.zoomLbl.textContent = `${+zoom}×`;
     const g = crop.on ? this.pictureGeom() : null;
     const v = this.video;
     const sig = g ? `${JSON.stringify(crop.p)}|${v.videoWidth}x${v.videoHeight}|${g.k.toFixed(5)}|${g.ox}|${g.oy}` : "off";
@@ -1431,6 +1492,9 @@ export class Editor {
     Object.assign(this.cropEl.style, {
       left: `${g.ox + r.x * g.k}px`, top: `${g.oy + r.y * g.k}px`, width: `${r.w * g.k}px`, height: `${r.h * g.k}px`,
     });
+    // zoomed far in, the frame is too narrow for the bar's word
+    const grip = this.cropEl.firstElementChild!, word = r.w * g.k < 64 ? "⇔" : "⇔ move";
+    if (grip.textContent !== word) grip.textContent = word;
   }
 
   /** The captions of the current clip, laid out as its export would draw them. */

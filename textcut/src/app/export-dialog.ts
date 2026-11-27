@@ -10,7 +10,7 @@ import type { Clip } from "../core/formats";
 import { buildJob, jobToShell, outputExt, type AudioCodec, type CutMode, type CutSpec } from "../core/ffjob";
 import type { ExportPreset } from "../core/link";
 import { radiantPlan } from "../core/radiant";
-import { cropRect, normalizeOps, opDef, OPS, type Field, type Frame, type OpState } from "../core/ops";
+import { cropRect, cropZoom, normalizeOps, opDef, OPS, type Field, type Frame, type OpState } from "../core/ops";
 import { sliceOutput } from "../core/ranges";
 import { fmtDur } from "../core/time";
 import { copyText, download, fmtBytes, h, modal, toast } from "./dom";
@@ -454,7 +454,10 @@ function cropPreview(video: HTMLVideoElement, view: Frame, out: Frame | null, st
       left: `${(r.x / frame.width) * 100}%`, top: `${(r.y / frame.height) * 100}%`,
       width: `${(r.w / frame.width) * 100}%`, height: `${(r.h / frame.height) * 100}%`,
     });
-    dims.textContent = out ? `${r.w}×${r.h}` : `${Math.round((r.w / frame.width) * 100)}% × ${Math.round((r.h / frame.height) * 100)}%`;
+    // what the export gets: a zoomed frame is scaled back up to its size at 1×
+    const full = cropRect({ ...st.p, size: 100 }, frame), zoom = +cropZoom(st.p.size).toFixed(1);
+    dims.textContent = (out ? `${full.w}×${full.h}` : `${Math.round((r.w / frame.width) * 100)}% × ${Math.round((r.h / frame.height) * 100)}%`) +
+      (zoom > 1 ? ` · ${zoom}× zoom` : "");
   };
   let drag: { x: number; y: number; cx: number; cy: number } | null = null;
   box.addEventListener("pointerdown", (e) => {
