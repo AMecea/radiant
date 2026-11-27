@@ -22,9 +22,10 @@ companion to radiant's `transcribe` step (`word_timestamps: true` → `<stem>.wo
   and go into shared links. They also apply to clips and selections you export.
 - **Fix misheard words**: select words (or click one) and press `E`, or use *✎ Fix
   text*. Type the correction, then press `Enter` (or `Esc` to cancel). An empty field
-  goes back to the transcribed text. Each word keeps its timing. Typing more or fewer
-  words than you selected spreads them over the old timings, so typing "Kenobi" over
-  "Ken obi" merges the two. Fixes are underlined, and hovering shows the original. They
+  goes back to the transcribed text. Select as much as you like, a whole passage if it
+  needs several fixes. Each word keeps its timing: the words you leave alone stay where
+  they are, and what you change is spread over the words it replaces, so typing "Kenobi"
+  over "Ken obi" merges the two. Fixes are underlined, and hovering shows the original. They
   show up in search, copied text, SRT and burned-in captions. They're saved with your
   edits, can be undone, and travel in shared links (`fx`).
 - **Lines**: the control above the transcript sets how the text is broken into lines.

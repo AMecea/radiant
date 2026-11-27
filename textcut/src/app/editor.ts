@@ -9,7 +9,7 @@ import { fmtDur, fmtShort, fmtTime } from "../core/time";
 import { APP_NAME } from "../core/app";
 import { bothEnds, CLIP_FORMATS, formatClips, oneLine, type Clip, type ClipFormat } from "../core/formats";
 import {
-  encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadText, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
+  encodeFixes, hasEdits, packEdits, rangeAt, removedRanges, spreadEdit, subtractRanges, unpackEdits, type CutParams, type Edits, type PackedEdits,
 } from "../core/edits";
 import { buildLink, packJson, packPreset, unpackPreset, type ExportPreset, type LinkParams } from "../core/link";
 import { parseRecs, placeRecs, recsFile, type PlacedRec, type Rec, type RecsFile } from "../core/recs";
@@ -605,7 +605,6 @@ export class Editor {
   private editSelWords(): void {
     const r = this.sel ?? (this.cur >= 0 ? { a: this.cur, b: this.cur } : null);
     if (!r) { toast("Select a word (or click one) to fix it", "info"); return; }
-    if (r.b - r.a >= 40) { toast("Select at most 40 words to fix at a time", "info"); return; }
     this.editWords(r.a, r.b);
   }
 
@@ -615,8 +614,9 @@ export class Editor {
     if (!els.length || this.trEl.querySelector(".w-edit")) return;
     if (!this.video.paused) this.video.pause();
     const text = textOf(this.words, a, b);
-    // Narrow: a single line as long as its text would run off the screen — a box that wraps instead.
-    const wide = this.narrow;
+    // A single line as long as its text would run off the screen (always so on a narrow
+    // one, and for a long passage anywhere) — a box that wraps instead.
+    const wide = this.narrow || text.length > 60;
     const attrs = {
       spellcheck: true, "aria-label": "Corrected text",
       title: "Enter: save · Esc: cancel · empty: back to the transcribed text",
@@ -653,13 +653,14 @@ export class Editor {
   }
 
   /**
-   * New text for words a..b. The timings stay; the text is spread over the words
-   * (see spreadText). Empty → back to what was transcribed.
+   * New text for words a..b. The timings stay; the words left as they were keep
+   * their place and what changed is spread over the words it replaces (see
+   * spreadEdit). Empty → back to what was transcribed.
    */
   private setWordText(a: number, b: number, value: string): void {
     const v = value.replace(/\s+/g, " ").trim();
     if (v === textOf(this.words, a, b)) return;
-    const texts = v ? spreadText(v, b - a + 1) : this.origW.slice(a, b + 1);
+    const texts = v ? spreadEdit(this.words.slice(a, b + 1).map((w) => w.w), v) : this.origW.slice(a, b + 1);
     this.snapshot();
     texts.forEach((t, k) => {
       const i = a + k;
