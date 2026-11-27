@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeFixes, encodeFixes, packEdits, spreadText, unpackEdits } from "../src/core/edits";
+import { decodeFixes, encodeFixes, packEdits, spreadEdit, spreadText, unpackEdits } from "../src/core/edits";
 import { buildLink, readLink } from "../src/core/link";
 import { parseLineMode, parseTranscript, textOf, transcriptLines } from "../src/core/transcript";
 
@@ -27,6 +27,39 @@ describe("spelling fixes", () => {
     expect(spreadText("Kenobi", 2)).toEqual(["", "Kenobi"]);            // merged
     expect(spreadText("a b c", 2)).toEqual(["a", "b c"]);               // split
     expect(spreadText("one two three four", 3)).toEqual(["one", "two", "three four"]);
+  });
+
+  it("a fix in a long passage leaves the other words where they were", () => {
+    const old = "one two three four five six seven eight".split(" ");
+    // same number of words: one to one
+    expect(spreadEdit(old, "one TWO three four five six seven eight")[1]).toBe("TWO");
+    // a word added near the start: only its neighbour changes
+    expect(spreadEdit(old, "one two and three four five six seven eight"))
+      .toEqual(["one", "two and", "three", "four", "five", "six", "seven", "eight"]);
+    // a word removed: it is emptied where it was
+    expect(spreadEdit(old, "one two four five six seven eight"))
+      .toEqual(["one", "two", "", "four", "five", "six", "seven", "eight"]);
+    // one added and one removed, far apart: each stays local (not a shift of all between)
+    expect(spreadEdit(old, "one new two three four five six eight"))
+      .toEqual(["one new", "two", "three", "four", "five", "six", "", "eight"]);
+    // two words merged, two words split
+    expect(spreadEdit(old, "one twothree four five six se ven eight"))
+      .toEqual(["one", "", "twothree", "four", "five", "six", "se ven", "eight"]);
+    // typed before the first word
+    expect(spreadEdit(old, "zero one two three four five six seven eight")[0]).toBe("zero one");
+    // a stretch rewritten with other words
+    expect(spreadEdit(old, "one two a b c d six seven eight"))
+      .toEqual(["one", "two", "a", "b", "c d", "six", "seven", "eight"]);
+    expect(spreadEdit(["Obi", "Wan", "Kenobi"], "Kenobi")).toEqual(["", "", "Kenobi"]);
+  });
+
+  it("clitics, punctuation and earlier fixes stay as they are when not touched", () => {
+    // "m" "-am" reads "m-am"; "." is its own word; "b c" was typed over one word; "" was merged away
+    const old = ["Eu", "m", "-am", "dus", ".", "a", "b c", "", "d"];
+    expect(spreadEdit(old, "Eu m-am dus. a b c d")).toEqual(old);
+    expect(spreadEdit(old, "Eu m-am dus. acasa a b c d")).toEqual(["Eu", "m", "-am", "dus", ". acasa", "a", "b c", "", "d"]);
+    expect(spreadEdit(old, "Eu ne-am dus. a b c D")).toEqual(["Eu", "", "ne-am", "dus", ".", "a", "b", "c", "D"]);
+    expect(spreadEdit(old, "Tu m-am dus. a b d")).toEqual(["Tu", "m", "-am", "dus", ".", "a", "", "b", "d"]);
   });
 
   it("an emptied word drops out of the text", () => {

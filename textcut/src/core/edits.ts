@@ -1,4 +1,4 @@
-import type { Word } from "./transcript";
+import { gluesToPrev, type Word } from "./transcript";
 import { mergeRanges, type TimeRange } from "./ranges";
 
 /**
@@ -193,4 +193,78 @@ export function spreadText(text: string, n: number): string[] {
   const m = toks.length;
   if (m === n) return toks;
   return Array.from({ length: n }, (_, k) => toks.slice(Math.floor((k * m) / n), Math.floor(((k + 1) * m) / n)).join(" "));
+}
+
+/**
+ * New text typed over the words `old` → one text per word, moving as little as
+ * possible: every word left as it was keeps its place (and so its timing), and
+ * only the stretches that changed are spread over the words they replace (see
+ * {@link spreadText}). That is what lets a long passage be fixed in one go: a
+ * word added near its start doesn't shift the rest.
+ */
+export function spreadEdit(old: readonly string[], text: string): string[] {
+  const toks = text.trim().split(/\s+/).filter(Boolean);
+  // What reads as one word: a word with the clitics / punctuation glued to it and
+  // the words emptied into it (textOf writes those without a space).
+  const units: { a: number; n: number; text: string }[] = [];
+  old.forEach((w, i) => {
+    const u = units[units.length - 1];
+    if (u && (!w || !u.text || gluesToPrev(w))) { u.n++; u.text += w; }
+    else units.push({ a: i, n: 1, text: w });
+  });
+  const out = [...old];
+  let ui = 0, ti = 0;
+  /** units ui..u2-1 were replaced by the words ti..t2-1 */
+  const replace = (u2: number, t2: number): void => {
+    const typed = toks.slice(ti, t2);
+    if (u2 > ui) {
+      const a = units[ui]!.a, last = units[u2 - 1]!;
+      if (typed.join(" ") === units.slice(ui, u2).map((u) => u.text).join(" ")) return;
+      spreadText(typed.join(" "), last.a + last.n - a).forEach((t, k) => { out[a + k] = t; });
+    } else if (typed.length) {
+      // typed where no word was: they ride on a neighbour, the one before if there is one
+      const p = units[ui - 1];
+      const i = p ? p.a + p.n - 1 : 0;
+      out[i] = (p ? [out[i]!, ...typed] : [...typed, out[i]!]).filter(Boolean).join(" ");
+    }
+  };
+  for (const [u, t] of [...sameWords(units.map((x) => x.text), toks), [units.length, toks.length] as const]) {
+    replace(u, t);
+    ui = u + 1;
+    ti = t + 1;
+  }
+  return out;
+}
+
+/**
+ * The words two texts share, in order: [index in a, index in b] pairs (a longest
+ * common subsequence). The same start and end are taken as they are; a middle too
+ * long to compare is left unmatched.
+ */
+function sameWords(a: readonly string[], b: readonly string[]): [number, number][] {
+  const n = a.length, m = b.length;
+  let head = 0;
+  while (head < n && head < m && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < n - head && tail < m - head && a[n - 1 - tail] === b[m - 1 - tail]) tail++;
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < head; i++) pairs.push([i, i]);
+  const N = n - head - tail, M = m - head - tail, W = M + 1;
+  if (N && M && N * M <= 1e6) {
+    const len = new Uint16Array((N + 1) * W); // len[i, j]: shared words in a[i..], b[j..]
+    for (let i = N - 1; i >= 0; i--) {
+      for (let j = M - 1; j >= 0; j--) {
+        len[i * W + j] = a[head + i] === b[head + j]
+          ? len[(i + 1) * W + j + 1]! + 1
+          : Math.max(len[(i + 1) * W + j]!, len[i * W + j + 1]!);
+      }
+    }
+    for (let i = 0, j = 0; i < N && j < M;) {
+      if (a[head + i] === b[head + j]) pairs.push([head + i++, head + j++]);
+      else if (len[(i + 1) * W + j]! >= len[i * W + j + 1]!) i++;
+      else j++;
+    }
+  }
+  for (let k = tail; k > 0; k--) pairs.push([n - k, m - k]);
+  return pairs;
 }
