@@ -4,7 +4,7 @@ import {
   decodeIdx, encodeIdx, keptRanges, packEdits, rangeAt, removedRanges, subtractRanges, unpackEdits, type Edits,
 } from "../src/core/edits";
 import { buildJob, jobToShell, outputExt, shQuote } from "../src/core/ffjob";
-import { cropRect, normalizeOps, opFilters } from "../src/core/ops";
+import { cropRect, cropZoom, dragCropCorner, MAX_ZOOM, normalizeOps, opFilters, zoomSize } from "../src/core/ops";
 import { buildLink, packPreset, readLink, unpackPreset } from "../src/core/link";
 import { radiantPlan } from "../src/core/radiant";
 
@@ -90,14 +90,69 @@ describe("processing ops", () => {
     expect(cropRect({ aspect: "9:16", size: 100, cx: 0.5, cy: 0.5 }, f)).toEqual({ w: 608, h: 1080, x: 656, y: 0 });
     expect(cropRect({ aspect: "1:1", size: 50, cx: 0, cy: 1 }, f)).toEqual({ w: 540, h: 540, x: 0, y: 540 });
   });
+  it("zooms in by making the crop smaller, between 1× and 5×", () => {
+    expect(zoomSize(1)).toBe(100);
+    expect(zoomSize(2)).toBe(50);
+    expect(zoomSize(1.3)).toBe(76.92);
+    expect(zoomSize(0.5)).toBe(100);
+    expect(zoomSize(40)).toBe(20);
+    expect(zoomSize(NaN)).toBe(100);
+    expect(MAX_ZOOM).toBe(5);
+    expect(cropZoom(50)).toBe(2);
+    expect(cropZoom(undefined)).toBe(1);
+    expect(cropZoom(5)).toBe(5);
+    for (const z of [1, 1.1, 1.5, 2.3, 3.7, 5]) expect(cropZoom(zoomSize(z)).toFixed(1)).toBe(z.toFixed(1));
+    // 2× on a 9:16 frame: half as wide and half as high, still centred
+    expect(cropRect({ aspect: "9:16", size: zoomSize(2), cx: 0.5, cy: 0.5 }, f)).toEqual({ w: 304, h: 540, x: 808, y: 270 });
+  });
+  it("dragging a corner of the frame resizes it around the opposite corner", () => {
+    // 9:16 on 1920×1080 at 1×: x 656..1264, y 0..1080
+    const p = { aspect: "9:16", size: 100, cx: 0.5, cy: 0.5 };
+    // bottom-right corner pulled in to half the size: the top-left corner stays
+    const a = dragCropCorner(p, f, "se", 960, 540);
+    expect(a.size).toBe(50);
+    expect(cropRect({ ...p, ...a }, f)).toEqual({ w: 304, h: 540, x: 656, y: 0 });
+    // top-left corner pulled in: the bottom-right corner stays
+    const b = dragCropCorner(p, f, "nw", 960, 540);
+    expect(cropRect({ ...p, ...b }, f)).toEqual({ w: 304, h: 540, x: 960, y: 540 });
+    // never smaller than the 5× zoom, never outside the picture
+    expect(dragCropCorner(p, f, "se", 660, 4).size).toBe(20);
+    expect(dragCropCorner(p, f, "se", 5000, 5000).size).toBe(100);
+    // growing again from a small frame in a corner stops at the picture's edge
+    const small = { aspect: "9:16", size: 50, cx: 0, cy: 0 };            // x 0..304, y 0..540
+    const c = dragCropCorner(small, f, "nw", -500, -500);                // no room up or left
+    expect(cropRect({ ...small, ...c }, f)).toEqual({ w: 304, h: 540, x: 0, y: 0 });
+    const d = dragCropCorner(small, f, "se", 456, 810);                  // 1.5× as large
+    // off the diagonal, the corner takes the nearest point on it
+    expect(dragCropCorner(p, f, "se", 1264, 540).size).toBeCloseTo(62.03, 1);
+    expect(cropRect({ ...small, ...d }, f)).toEqual({ w: 456, h: 810, x: 0, y: 0 });
+  });
   it("crops by expressions when the frame size is unknown (an unprobed full-quality original)", () => {
     const crop = (p: Record<string, string | number>) =>
       opFilters(normalizeOps([{ id: "crop", on: true, p }]), null, true).video;
     expect(crop({ aspect: "9:16" })).toEqual(["crop=w=trunc(min(iw\\,ih*9/16)/2)*2:h=trunc(min(ih\\,iw/(9/16))/2)*2"]);
     expect(crop({ aspect: "1:1", size: 50, cx: 0.25, cy: 1 })).toEqual([
       "crop=w=trunc(min(iw\\,ih*1/1)*0.5/2)*2:h=trunc(min(ih\\,iw/(1/1))*0.5/2)*2" +
-      ":x=trunc(clip(0.25*iw-ow/2\\,0\\,iw-ow)/2)*2:y=trunc(clip(1*ih-oh/2\\,0\\,ih-oh)/2)*2",
+      ":x=trunc(clip(0.25*iw-ow/2\\,0\\,iw-ow)/2)*2:y=trunc(clip(1*ih-oh/2\\,0\\,ih-oh)/2)*2" +
+      // zoomed in: back up to the size it has at 1×
+      ",scale=w=trunc(iw/0.5/2)*2:h=trunc(ih/0.5/2)*2:flags=lanczos",
     ]);
+  });
+  it("scales a zoomed crop back up, so the export keeps its size", () => {
+    const run = (p: Record<string, string | number>, more: Array<{ id: string; on: boolean; p: Record<string, string | number> }> = []) =>
+      opFilters(normalizeOps([{ id: "crop", on: true, p }, ...more]), f, true);
+    // 2× on 9:16: a 304×540 piece of the picture, exported at the 608×1080 of the unzoomed frame
+    const z = run({ aspect: "9:16", size: 50 });
+    expect(z.video).toEqual(["crop=304:540:808:270,scale=608:1080:flags=lanczos"]);
+    expect(z.frame).toEqual({ width: 608, height: 1080 });
+    // not zoomed: just the crop
+    expect(run({ aspect: "9:16", size: 100 }).video).toEqual(["crop=608:1080:656:0"]);
+    // zooming without reshaping (the source's own shape)
+    expect(run({ aspect: "16:9", size: 50 }).video).toEqual(["crop=960:540:480:270,scale=1920:1080:flags=lanczos"]);
+    expect(run({ aspect: "16:9", size: 100 }).video).toEqual([]);
+    // Resize still sees the exported size
+    expect(run({ aspect: "9:16", size: 50 }, [{ id: "scale", on: true, p: { short: "540" } }]).video)
+      .toEqual(["crop=304:540:808:270,scale=608:1080:flags=lanczos", "scale=540:960:flags=lanczos"]);
   });
   it("chains crop → scale with the cropped size", () => {
     const ops = normalizeOps([{ id: "crop", on: true, p: { aspect: "1:1" } }, { id: "scale", on: true, p: { short: "720" } },

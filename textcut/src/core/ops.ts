@@ -98,6 +98,45 @@ export function cropRect(p: Params, f: Frame): { w: number; h: number; x: number
   return { w, h, x, y };
 }
 
+/** The smallest crop, as % of the largest frame of its shape; so the furthest zoom is 5×. */
+export const CROP_MIN = 20;
+export const MAX_ZOOM = 100 / CROP_MIN;
+
+/** How far in a crop of this size is: 1× keeps as much of the picture as its shape allows. */
+export function cropZoom(size: unknown): number {
+  return 100 / clamp(Number(size ?? 100) || 100, CROP_MIN, 100);
+}
+
+/** The crop size (%) that zooms in this much. */
+export function zoomSize(zoom: number): number {
+  return +clamp(100 / (zoom > 0 ? zoom : 1), CROP_MIN, 100).toFixed(2);
+}
+
+export type Corner = "nw" | "ne" | "sw" | "se";
+
+/**
+ * The crop after one corner of its frame is dragged to (x, y), in source pixels: the
+ * opposite corner stays where it is and the frame keeps its shape. `p` is the crop as
+ * it was when the drag began, so a long drag doesn't pile up rounding.
+ */
+export function dragCropCorner(p: Params, f: Frame, corner: Corner, x: number, y: number): { size: number; cx: number; cy: number } {
+  const r = cropRect(p, f), full = cropRect({ ...p, size: 100 }, f);
+  const north = corner[0] === "n", west = corner[1] === "w";
+  const ax = west ? r.x + r.w : r.x, ay = north ? r.y + r.h : r.y;
+  // the corner goes to the point of the frame's diagonal nearest the pointer, within the picture
+  const want = ((west ? ax - x : x - ax) * full.w + (north ? ay - y : y - ay) * full.h) / (full.w ** 2 + full.h ** 2);
+  const room = Math.min(1, (west ? ax : f.width - ax) / full.w, (north ? ay : f.height - ay) / full.h);
+  const size = +(clamp(want, CROP_MIN / 100, room) * 100).toFixed(2);
+  // the centre that puts the new frame (in whole, even pixels) against the fixed corner;
+  // half a pixel over, so that rounding the centre can't move that corner
+  const { w, h } = cropRect({ ...p, size }, f);
+  return {
+    size,
+    cx: +(((west ? ax - w : ax) + w / 2 + 0.5) / f.width).toFixed(4),
+    cy: +(((north ? ay - h : ay) + h / 2 + 0.5) / f.height).toFixed(4),
+  };
+}
+
 /** The captions' font choices; rebuilt in place when a font is registered. */
 const FONT_OPTIONS: Array<[string, string]> = [];
 
@@ -112,11 +151,11 @@ export const OPS: OpDef[] = [
   {
     id: "crop",
     label: "Crop",
-    help: "Reframe to another aspect ratio. Drag the frame on the preview to position it.",
+    help: "Reframe to another aspect ratio; a smaller size zooms in (the picture is scaled back up). Drag the frame on the preview to position it.",
     stream: "video",
     fields: [
       { key: "aspect", label: "Aspect", type: "select", options: ASPECTS },
-      { key: "size", label: "Size", type: "range", min: 20, max: 100, step: 1, unit: "%" },
+      { key: "size", label: "Size (smaller zooms in)", type: "range", min: CROP_MIN, max: 100, step: 1, unit: "%" },
       { key: "cx", label: "Horizontal centre", type: "range", min: 0, max: 1, step: 0.005 },
       { key: "cy", label: "Vertical centre", type: "range", min: 0, max: 1, step: 0.005 },
     ],
@@ -135,11 +174,19 @@ export const OPS: OpDef[] = [
         if (cx !== 0.5 || cy !== 0.5) {
           filter += `:x=trunc(clip(${cx}*iw-ow/2\\,0\\,iw-ow)/2)*2:y=trunc(clip(${cy}*ih-oh/2\\,0\\,ih-oh)/2)*2`;
         }
+        if (size < 1) filter += `,scale=w=trunc(iw/${size}/2)*2:h=trunc(ih/${size}/2)*2:flags=lanczos`;
         return { filter, frame: null };
       }
       const c = cropRect(p, f);
       if (c.w >= f.width - 1 && c.h >= f.height - 1) return null;
-      return { filter: `crop=${c.w}:${c.h}:${c.x}:${c.y}`, frame: { width: c.w, height: c.h } };
+      // Zoomed in: back up to the size this frame has at 1×, so a zoom shows the picture
+      // closer rather than making the video smaller (captions are drawn at that size too).
+      const full = cropRect({ ...p, size: 100 }, f);
+      if (full.w <= c.w) return { filter: `crop=${c.w}:${c.h}:${c.x}:${c.y}`, frame: { width: c.w, height: c.h } };
+      return {
+        filter: `crop=${c.w}:${c.h}:${c.x}:${c.y},scale=${full.w}:${full.h}:flags=lanczos`,
+        frame: { width: full.w, height: full.h },
+      };
     },
   },
   {
